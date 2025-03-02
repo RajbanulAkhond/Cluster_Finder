@@ -22,8 +22,8 @@ pip install cluster-finder
 ### From Source
 
 ```bash
-git clone https://github.com/RajbanulAkhond/Cluster_Finder.git
-cd Cluster_Finder
+git clone https://github.com/username/cluster_finder.git
+cd cluster_finder
 pip install -e .
 ```
 
@@ -104,8 +104,8 @@ For more detailed usage examples and API documentation, see the [example scripts
 To run the test suite, first install the package with development dependencies:
 
 ```bash
-git clone https://github.com/RajbanulAkhond/Cluster_Finder.git
-cd Cluster_Finder
+git clone https://github.com/username/cluster_finder.git
+cd cluster_finder
 pip install -e ".[dev]"
 ```
 
@@ -146,7 +146,7 @@ If you use this package in your research, please cite:
   title = {Cluster Finder: A Python package for finding atomic clusters in crystal structures},
   year = {2023},
   publisher = {GitHub},
-  url = {https://github.com/RajbanulAkhond/Cluster_Finder}
+  url = {https://github.com/username/cluster_finder}
 }
 ```
 
