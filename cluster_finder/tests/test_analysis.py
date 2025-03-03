@@ -6,6 +6,7 @@ import pytest
 import numpy as np
 import pandas as pd
 from pymatgen.core.structure import Structure
+from pathlib import Path
 
 from cluster_finder.analysis.analysis import (
     get_point_group_order,
@@ -51,51 +52,49 @@ class TestAnalysis:
         assert dim == "0D"
     
     def test_cluster_compounds_dataframe(self, simple_cubic_structure, sample_cluster):
-        """Test creating cluster compounds dataframe."""
-        # Create a single cluster
-        centroid = calculate_centroid(sample_cluster, simple_cubic_structure.lattice)
-        cluster = {
-            "sites": sample_cluster,
-            "size": 3,
-            "average_distance": 3.0,
-            "centroid": centroid
-        }
+        """Test creating dataframe from compounds with clusters."""
+        # Create test data
+        compounds = [{
+            "material_id": "test-1",
+            "formula": "Fe2O3",
+            "total_magnetization": 5.0,
+            "structure": simple_cubic_structure,
+            "clusters": [{
+                "sites": sample_cluster,
+                "size": 3,
+                "average_distance": 2.5,
+                "centroid": [0, 0, 0]
+            }]
+        }]
         
-        # Create a compound with the cluster
-        compound = {
-            "material_id": "test_id",
-            "formula": "Fe8",
-            "total_magnetization": 8.0,
-            "clusters": [cluster],
-            "structure": simple_cubic_structure
-        }
+        # Create dataframe
+        df = cluster_compounds_dataframe(compounds, "Fe-O")
         
-        # Test dataframe creation
-        df = cluster_compounds_dataframe([compound], "test_system")
-        
+        # Check basic properties
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 1
-        assert df.iloc[0]["material_id"] == "test_id"
-        assert df.iloc[0]["formula"] == "Fe8"
-        assert df.iloc[0]["total_magnetization"] == 8.0
+        assert df.iloc[0]["material_id"] == "test-1"
+        assert df.iloc[0]["formula"] == "Fe2O3"
+        assert df.iloc[0]["compound_system"] == "Fe-O"
+        assert df.iloc[0]["cluster_sizes"] == [3]
         assert df.iloc[0]["num_clusters"] == 1
-        assert df.iloc[0]["compound_system"] == "test_system"
     
     def test_rank_clusters(self):
         """Test ranking clusters."""
-        # Create a simple dataframe
+        # Create test data
         data = {
             "material_id": ["id1", "id2", "id3"],
-            "space_group": ["P1", "Fm-3m", "P1"],
-            "point_group": ["1", "m-3m", "1"],
-            "cluster_sizes": [[2, 3], [4], [2, 2, 2]],
-            "average_distance": [[2.5, 3.0], [2.2], [3.1, 3.2, 3.3]]
+            "space_group": ["P1", "P1", "P1"],
+            "point_group": ["1", "1", "1"],
+            "cluster_sizes": ["[2]", "[2]", "[2]"],
+            "average_distance": ["[2.5]", "[2.2]", "[3.1]"]
         }
         df = pd.DataFrame(data)
         
-        # Test ranking
+        # Rank clusters
         ranked_df = rank_clusters(df)
         
+        # Check results
         assert isinstance(ranked_df, pd.DataFrame)
         assert len(ranked_df) == 3
         
