@@ -26,7 +26,8 @@ from .io.fileio import (
     export_csv_data
 )
 from .utils.helpers import get_transition_metals
-from .analysis.analysis import cluster_compounds_dataframe, rank_clusters
+from .analysis.dataframe import cluster_compounds_dataframe
+from .analysis.postprocess import rank_clusters
 
 
 def get_parser():

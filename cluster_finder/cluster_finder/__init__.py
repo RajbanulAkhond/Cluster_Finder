@@ -45,12 +45,15 @@ from .visualization.visualize import (
 )
 
 # Import analysis functionality
-from .analysis.analysis import (
+from .analysis.postprocess import (
     get_point_group_order,
     get_space_group_order,
     classify_dimensionality,
-    cluster_compounds_dataframe,
     rank_clusters
+)
+
+from .analysis.dataframe import (
+    cluster_compounds_dataframe
 )
 
 # Import I/O functionality

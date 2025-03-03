@@ -1,5 +1,5 @@
 """
-Analysis functions for cluster_finder package.
+Postprocessing functions for cluster_finder package.
 
 This module contains functions for analyzing, classifying, and ranking clusters.
 """
@@ -63,39 +63,37 @@ def classify_dimensionality(structure, distance_cutoff=3.5):
     
     Parameters:
         structure (Structure): A pymatgen Structure object
-        distance_cutoff (float): Cutoff distance for connectivity
+        distance_cutoff (float): Maximum distance for connectivity
         
     Returns:
-        str: Dimensionality classification ('0D', '1D', '2D', '3D')
+        str: Dimensionality classification ("0D", "1D", "2D", or "3D")
     """
-    # Create connectivity matrix
-    num_sites = len(structure)
-    connectivity = np.zeros((num_sites, num_sites), dtype=bool)
-    
-    # Populate connectivity matrix
-    for i in range(num_sites):
-        for j in range(i+1, num_sites):
-            if structure[i].distance(structure[j]) <= distance_cutoff:
-                connectivity[i, j] = connectivity[j, i] = True
-    
-    # Check periodicity along each lattice vector
+    # Initialize dimensionality count
     dim_count = 0
     
-    # Check each lattice direction
+    # Check connectivity in each dimension
     for dim in range(3):
-        # Create translation vector in this dimension
+        # Create translation vectors for this dimension
         translation = np.zeros(3)
         translation[dim] = 1.0
         
         # Check if any site connects to its periodic image
-        for i in range(num_sites):
-            site_i = structure[i]
-            # Create fractional coordinates for translated site
-            frac_coords = site_i.frac_coords + translation
+        for i, site_i in enumerate(structure):
+            # Skip if we already found connectivity in this dimension
+            if dim_count > dim:
+                break
+                
+            # Get fractional coordinates of site_i
+            frac_i = site_i.frac_coords
             
-            # Find if it connects to any site in the actual structure
-            for j in range(num_sites):
-                site_j = structure[j]
+            # Check connectivity to periodic images
+            for j, site_j in enumerate(structure):
+                # Get fractional coordinates of site_j
+                frac_j = site_j.frac_coords
+                
+                # Calculate fractional coordinates of periodic image
+                frac_coords = frac_j + translation
+                
                 # Check distance between site_i and periodic image of site_j
                 if site_i.distance_from_point(structure.lattice.get_cartesian_coords(frac_coords)) <= distance_cutoff:
                     dim_count += 1
@@ -114,68 +112,6 @@ def classify_dimensionality(structure, distance_cutoff=3.5):
         return "2D"
     else:
         return "3D"
-
-
-def cluster_compounds_dataframe(compounds_with_clusters, compound_system=None):
-    """
-    Create a dataframe with cluster information for all compounds.
-    
-    Parameters:
-        compounds_with_clusters (list): List of compound dictionaries with clusters
-        compound_system (str, optional): Name of the compound system
-        
-    Returns:
-        pandas.DataFrame: Dataframe with cluster information
-    """
-    records = []
-    
-    for compound in compounds_with_clusters:
-        if not compound["clusters"]:
-            continue  # Skip compounds without clusters
-            
-        material_id = compound["material_id"]
-        formula = compound["formula"]
-        total_magnetization = compound.get("total_magnetization", 0)
-        structure = compound["structure"]
-        
-        # Analyze space group
-        try:
-            analyzer = SpacegroupAnalyzer(structure)
-            space_group = analyzer.get_space_group_symbol()
-            point_group = analyzer.get_point_group_symbol()
-        except Exception:
-            space_group = "Symmetry Not Determined"
-            point_group = "Symmetry Not Determined"
-            
-        # Group clusters by size
-        clusters_by_size = {}
-        for cluster in compound["clusters"]:
-            size = cluster["size"]
-            if size not in clusters_by_size:
-                clusters_by_size[size] = []
-            clusters_by_size[size].append(cluster)
-            
-        # Create record
-        record = {
-            "material_id": material_id,
-            "formula": formula,
-            "total_magnetization": total_magnetization,
-            "space_group": space_group,
-            "point_group": point_group,
-            "cluster_sizes": list(clusters_by_size.keys()),
-            "avg_cluster_size": sum(clusters_by_size.keys()) / len(clusters_by_size) if clusters_by_size else 0,
-            "num_clusters": len(compound["clusters"]),
-            "average_distance": [cluster["average_distance"] for cluster in compound["clusters"]],
-            "point_groups": {}, # Will be filled by symmetry analysis later
-            "dimensionality": classify_dimensionality(structure),
-            "compound_system": compound_system,
-        }
-        
-        records.append(record)
-        
-    # Create DataFrame
-    df = pd.DataFrame(records)
-    return df
 
 
 def rank_clusters(df):

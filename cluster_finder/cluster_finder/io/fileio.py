@@ -1,25 +1,28 @@
 """
 I/O functions for cluster_finder package.
 
-This module contains functions for importing and exporting structures and data.
+This module contains functions for reading and writing files.
 """
 
+import os
 import pandas as pd
 import numpy as np
 from pymatgen.core.structure import Structure
 from pymatgen.io.cif import CifWriter
-import os
 
+# Import at the top level to avoid circular imports
+from ..analysis.postprocess import get_point_group_order, get_space_group_order
 
 def export_structure_to_cif(structure, filename):
-    """Export structure to CIF file.
+    """
+    Export a pymatgen Structure to a CIF file.
     
-    Args:
-        structure (Structure): Pymatgen structure object
-        filename (str): Output filename
+    Parameters:
+        structure (Structure): A pymatgen Structure object
+        filename (str): Path to the output CIF file
         
     Returns:
-        str: Path to the output file
+        str: Path to the output CIF file
     """
     # Create output directory if it doesn't exist
     os.makedirs(os.path.dirname(filename) or '.', exist_ok=True)
@@ -33,26 +36,28 @@ def export_structure_to_cif(structure, filename):
 
 
 def import_csv_data(filename):
-    """Import cluster data from CSV file.
+    """
+    Import cluster data from a CSV file.
     
-    Args:
-        filename (str): Input CSV filename
+    Parameters:
+        filename (str): Path to the CSV file
         
     Returns:
-        pandas.DataFrame: DataFrame containing cluster data
+        pandas.DataFrame: DataFrame containing the imported data
     """
     return pd.read_csv(filename)
 
 
 def export_csv_data(df, filename):
-    """Export cluster data to CSV file.
+    """
+    Export cluster data to a CSV file.
     
-    Args:
-        df (pandas.DataFrame): DataFrame containing cluster data
-        filename (str): Output filename
+    Parameters:
+        df (pandas.DataFrame): DataFrame containing the data to export
+        filename (str): Path to the output CSV file
         
     Returns:
-        str: Path to the output file
+        str: Path to the output CSV file
     """
     # Create output directory if it doesn't exist
     os.makedirs(os.path.dirname(filename) or '.', exist_ok=True)
@@ -94,12 +99,10 @@ def postprocess_clusters(csv_filename):
     
     # Calculate point group order
     if "point_group" in df.columns:
-        from ..analysis.analysis import get_point_group_order
         df["point_group_order"] = df["point_group"].apply(get_point_group_order)
     
     # Calculate space group order
     if "space_group" in df.columns:
-        from ..analysis.analysis import get_space_group_order
         df["space_group_order"] = df["space_group"].apply(get_space_group_order)
     
     return df 

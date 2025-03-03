@@ -8,12 +8,14 @@ import pandas as pd
 from pymatgen.core.structure import Structure
 from pathlib import Path
 
-from cluster_finder.analysis.analysis import (
+from cluster_finder.analysis.postprocess import (
     get_point_group_order,
     get_space_group_order,
     classify_dimensionality,
-    cluster_compounds_dataframe,
     rank_clusters
+)
+from cluster_finder.analysis.dataframe import (
+    cluster_compounds_dataframe
 )
 from cluster_finder.core.structure import calculate_centroid
 
