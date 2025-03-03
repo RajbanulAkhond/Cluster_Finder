@@ -374,13 +374,18 @@ def example_simple_search():
     # Define the elements to search for
     elements = ["Fe", "Co", "Ni"]
     
-    # Call the search_and_analyze_trimers function
-    results = cf.search_and_analyze_trimers(elements, API_KEY)
+    print("To search for trimer clusters in materials containing specific elements:")
+    print("results = cf.search_and_analyze_trimers(elements, YOUR_API_KEY)")
+    print("\nExample elements:", elements)
     
-    # Print results
-    print("Trimer search results:")
-    for result in results:
-        print(f"Material ID: {result['material_id']}, Formula: {result['formula']}")
+    # Commented out actual API call to avoid execution without valid API key
+    # results = cf.search_and_analyze_trimers(elements, API_KEY)
+    
+    # Example of expected output:
+    print("\nExample output:")
+    print("Found 5 compounds with trimer clusters.")
+    print("Material ID: mp-1234, Formula: Fe3Co2")
+    print("Material ID: mp-5678, Formula: Ni3Co")
 
 
 def main():
