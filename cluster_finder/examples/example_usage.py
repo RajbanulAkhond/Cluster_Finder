@@ -367,6 +367,22 @@ def example_materials_project_integration():
                 print(f"  Formation Energy: {compound.formation_energy_per_atom:.3f} eV/atom")
 
 
+def example_simple_search():
+    """Example of using simple search to find trimer clusters."""
+    divider("7. SIMPLE SEARCH FOR TRIMER CLUSTERS")
+    
+    # Define the elements to search for
+    elements = ["Fe", "Co", "Ni"]
+    
+    # Call the search_and_analyze_trimers function
+    results = cf.search_and_analyze_trimers(elements, API_KEY)
+    
+    # Print results
+    print("Trimer search results:")
+    for result in results:
+        print(f"Material ID: {result['material_id']}, Formula: {result['formula']}")
+
+
 def main():
     """Main function demonstrating the package usage."""
     start_time = time.time()
@@ -390,6 +406,9 @@ def main():
         
         # Example 6: Materials Project integration
         example_materials_project_integration()
+        
+        # Example 7: Simple search for trimer clusters
+        example_simple_search()
         
         # Done!
         elapsed_time = time.time() - start_time
