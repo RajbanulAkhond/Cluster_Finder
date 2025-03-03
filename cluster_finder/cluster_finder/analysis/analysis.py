@@ -189,10 +189,19 @@ def rank_clusters(df):
         pandas.DataFrame: Sorted DataFrame with ranking information
     """
     # Filter out rows where symmetry was not determined or cluster size > 6
-    df_filtered = df[
-        (df["space_group"] != "Symmetry Not Determined") &
-        (df["cluster_sizes"].apply(lambda x: all(int(size) <= 6 for size in ast.literal_eval(x) if isinstance(x, str) else x)))
-    ].copy()
+    # Create a mask for space group condition
+    space_group_mask = df["space_group"] != "Symmetry Not Determined"
+    
+    # Create a mask for cluster sizes condition
+    def check_cluster_size(x):
+        if isinstance(x, str):
+            x = ast.literal_eval(x)
+        return all(int(size) <= 6 for size in x)
+    
+    cluster_size_mask = df["cluster_sizes"].apply(check_cluster_size)
+    
+    # Apply both masks to filter the dataframe
+    df_filtered = df[space_group_mask & cluster_size_mask].copy()
     
     # Process average_distance column
     if "average_distance" in df_filtered.columns:
