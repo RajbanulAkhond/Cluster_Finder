@@ -31,24 +31,25 @@ def find_trimers(structure, unique_sites, distances, transition_metals):
     ]
 
 
-def analyze_compound_trimers(entries, transition_metals=None, api_key=None):
+def analyze_compound_trimers(entries, elements, api_key=None):
     """
     Analyze a list of entries to identify compounds with trimer clusters.
     
     Parameters:
         entries (list): List of entries with structure information.
-        transition_metals (list, optional): List of transition metal element symbols.
-                                           If None, uses the default list from get_transition_metals().
+        elements (list): List of element symbols to search for.
         api_key (str, optional): Materials Project API key.
         
     Returns:
         list: List of dictionaries containing material_id, formula, and trimer information
     """
-    # Get default transition metals list if not provided
-    if transition_metals is None:
-        transition_metals = get_transition_metals()
+    # Get the full list of transition metals for reference
+    all_transition_metals = get_transition_metals()
     
-    # Calculate metal distances using the helper function
+    # Filter the elements list to only include transition metals
+    transition_metals = [elem for elem in elements if elem in all_transition_metals]
+    
+    # Calculate metal distances using the helper function (only for transition metals)
     metal_distances = calculate_metal_distances(transition_metals, api_key)
     
     compounds_with_trimers = []
@@ -101,8 +102,14 @@ def search_and_analyze_trimers(elements, api_key, criteria=None):
     # Search for compounds containing the specified elements
     entries = search_transition_metal_compounds(elements, api_key, **search_criteria)
     
-    # Calculate distances for the specified elements (for use in neighbor calculations)
-    metal_distances = calculate_metal_distances(elements, api_key)
+    # Get the full list of transition metals for reference
+    all_transition_metals = get_transition_metals()
+    
+    # Filter the elements list to only include transition metals
+    transition_metals = [elem for elem in elements if elem in all_transition_metals]
+    
+    # Calculate distances for the transition metals only
+    metal_distances = calculate_metal_distances(transition_metals, api_key)
     
     compounds_with_trimers = []
     
@@ -111,8 +118,8 @@ def search_and_analyze_trimers(elements, api_key, criteria=None):
         material_id = result.material_id
         formula = result.formula_pretty
         
-        unique_sites = find_non_equivalent_positions(structure, elements)
-        trimers = find_trimers(structure, unique_sites, metal_distances, elements)
+        unique_sites = find_non_equivalent_positions(structure, transition_metals)
+        trimers = find_trimers(structure, unique_sites, metal_distances, transition_metals)
         
         if trimers:
             compounds_with_trimers.append({
