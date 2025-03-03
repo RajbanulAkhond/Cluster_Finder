@@ -31,16 +31,18 @@ def find_trimers(structure, unique_sites, distances, transition_metals):
     ]
 
 
-def analyze_compound_trimers(entries=None, transition_metals=None, api_key=None, criteria=None):
+def analyze_compound_trimers(entries=None, transition_metals=None, api_key=None, compound_elements=None, criteria=None):
     """
     Analyze a list of entries to identify compounds with trimer clusters.
     
     Parameters:
         entries (list, optional): List of entries with structure information.
                                  If None, entries will be fetched using search_transition_metal_compounds.
-        transition_metals (list, optional): List of transition metal element symbols.
+        transition_metals (list, optional): List of transition metal element symbols for trimer detection.
                                           If None, uses the default list from get_transition_metals().
         api_key (str, optional): Materials Project API key.
+        compound_elements (list, optional): Elements to search for in compounds (e.g., [Nb, Cl]).
+                                          If None and entries is None, transition_metals will be used.
         criteria (dict, optional): Additional search criteria for search_transition_metal_compounds.
         
     Returns:
@@ -54,7 +56,15 @@ def analyze_compound_trimers(entries=None, transition_metals=None, api_key=None,
     if entries is None:
         if criteria is None:
             criteria = {}
-        entries = search_transition_metal_compounds(transition_metals, api_key, **criteria)
+            
+        # Use compound_elements for search if provided, otherwise use transition_metals
+        search_elements = compound_elements if compound_elements is not None else transition_metals
+        
+        entries = search_transition_metal_compounds(
+            search_elements, 
+            api_key, 
+            **criteria
+        )
     
     # Calculate metal distances using the helper function
     metal_distances = calculate_metal_distances(transition_metals, api_key)
@@ -91,14 +101,16 @@ def print_trimer_results(compounds_with_trimers):
         print(f"Material ID: {compound['material_id']}, Formula: {compound['formula']}")
 
 
-def find_trimers_in_materials(api_key, transition_metals=None, criteria=None):
+def find_trimers_in_materials(api_key, transition_metals=None, compound_elements=None, criteria=None):
     """
     Convenience function to search for materials with trimer clusters in one step.
     
     Parameters:
         api_key (str): Materials Project API key.
-        transition_metals (list, optional): List of transition metal element symbols.
+        transition_metals (list, optional): List of transition metal element symbols for trimer detection.
                                           If None, uses the default list from get_transition_metals().
+        compound_elements (list, optional): Elements to search for in compounds (e.g., [Nb, Cl]).
+                                          If None, transition_metals will be used.
         criteria (dict, optional): Additional search criteria for search_transition_metal_compounds.
         
     Returns:
@@ -107,6 +119,7 @@ def find_trimers_in_materials(api_key, transition_metals=None, criteria=None):
     compounds_with_trimers = analyze_compound_trimers(
         transition_metals=transition_metals,
         api_key=api_key,
+        compound_elements=compound_elements,
         criteria=criteria
     )
     
