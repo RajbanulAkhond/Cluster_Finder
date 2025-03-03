@@ -53,15 +53,16 @@ from .analysis.postprocess import (
 )
 
 from .analysis.dataframe import (
-    cluster_compounds_dataframe
+    cluster_compounds_dataframe,
+    postprocessed_clusters_dataframe,
+    postprocess_clusters  # For backward compatibility
 )
 
 # Import I/O functionality
 from .io.fileio import (
     export_structure_to_cif,
     import_csv_data,
-    export_csv_data,
-    postprocess_clusters
+    export_csv_data
 )
 
 # Import utility functions
@@ -107,13 +108,14 @@ __all__ = [
     'get_space_group_order',
     'classify_dimensionality',
     'cluster_compounds_dataframe',
+    'postprocessed_clusters_dataframe',
+    'postprocess_clusters',  # For backward compatibility
     'rank_clusters',
     
     # I/O
     'export_structure_to_cif',
     'import_csv_data',
     'export_csv_data',
-    'postprocess_clusters',
     
     # Utilities
     'calculate_metal_distances',

@@ -12,7 +12,9 @@ from .postprocess import (
 )
 
 from .dataframe import (
-    cluster_compounds_dataframe
+    cluster_compounds_dataframe,
+    postprocessed_clusters_dataframe,
+    postprocess_clusters  # For backward compatibility
 )
 
 __all__ = [
@@ -20,5 +22,7 @@ __all__ = [
     'get_space_group_order',
     'classify_dimensionality',
     'rank_clusters',
-    'cluster_compounds_dataframe'
+    'cluster_compounds_dataframe',
+    'postprocessed_clusters_dataframe',
+    'postprocess_clusters'  # For backward compatibility
 ]

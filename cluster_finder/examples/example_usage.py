@@ -244,10 +244,13 @@ def example_file_operations(structure, clusters):
         print(f"Exported cluster data to {csv_path}")
         
         # Import and post-process
-        processed_df = cf.postprocess_clusters(csv_path)
+        processed_df = cf.postprocessed_clusters_dataframe(csv_path)
         print("Post-processed DataFrame:")
         print(f"  Columns: {', '.join(processed_df.columns)}")
         print(f"  Rows: {len(processed_df)}")
+        
+        # Alternative: process DataFrame directly
+        # processed_df = cf.postprocessed_clusters_dataframe(df)
         
         # Show the first few rows
         if not processed_df.empty:
