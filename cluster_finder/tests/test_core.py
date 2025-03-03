@@ -10,7 +10,6 @@ from pymatgen.core.structure import Structure, Lattice
 from cluster_finder.core.structure import (
     find_non_equivalent_positions,
     create_connectivity_matrix,
-    calculate_centroid,
     generate_supercell,
     structure_to_graph
 )
@@ -21,7 +20,8 @@ from cluster_finder.core.clusters import (
     build_graph,
     split_cluster,
     analyze_clusters,
-    identify_unique_clusters
+    identify_unique_clusters,
+    calculate_centroid
 )
 
 

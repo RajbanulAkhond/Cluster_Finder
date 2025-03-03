@@ -14,7 +14,6 @@ __version__ = "0.1.0"
 from .core.structure import (
     find_non_equivalent_positions,
     create_connectivity_matrix,
-    calculate_centroid,
     generate_supercell,
     structure_to_graph
 )
@@ -25,7 +24,8 @@ from .core.clusters import (
     build_graph,
     split_cluster,
     analyze_clusters,
-    identify_unique_clusters
+    identify_unique_clusters,
+    calculate_centroid
 )
 
 # Import visualization functionality
@@ -73,11 +73,11 @@ __all__ = [
     # Core - Structure
     'find_non_equivalent_positions',
     'create_connectivity_matrix',
-    'calculate_centroid',
     'generate_supercell',
+    'structure_to_graph',
     
     # Core - Clusters
-    'structure_to_graph',
+    'calculate_centroid',
     'find_clusters',
     'calculate_average_distance',
     'build_graph',

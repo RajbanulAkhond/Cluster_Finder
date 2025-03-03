@@ -6,7 +6,7 @@ This module contains functions for finding, analyzing, and manipulating clusters
 
 import numpy as np
 import networkx as nx
-from .structure import calculate_centroid, structure_to_graph
+from .structure import structure_to_graph
 
 # Default constants
 DEFAULT_MAX_RADIUS = 3.5  # Maximum atom-to-atom distance for cluster search
@@ -53,6 +53,22 @@ def calculate_average_distance(cluster, max_radius=DEFAULT_MAX_RADIUS):
             if distance <= max_radius:
                 distances.append(distance)
     return np.mean(distances) if distances else float('inf')
+
+
+def calculate_centroid(cluster, lattice):
+    """
+    Calculate the centroid of a cluster in Cartesian coordinates.
+    
+    Parameters:
+        cluster (list): List of pymatgen Site objects
+        lattice (Lattice): The lattice of the structure
+        
+    Returns:
+        numpy.ndarray: Centroid coordinates
+    """
+    cart_coords = np.array([site.coords for site in cluster])
+    centroid = np.mean(cart_coords, axis=0)
+    return centroid
 
 
 def build_graph(cluster, cutoff, distances_cache=None):

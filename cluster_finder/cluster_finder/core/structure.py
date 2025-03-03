@@ -78,22 +78,6 @@ def structure_to_graph(connectivity_matrix):
     return G
 
 
-def calculate_centroid(cluster, lattice):
-    """
-    Calculate the centroid of a cluster in Cartesian coordinates.
-    
-    Parameters:
-        cluster (list): List of pymatgen Site objects
-        lattice (Lattice): The lattice of the structure
-        
-    Returns:
-        numpy.ndarray: Centroid coordinates
-    """
-    cart_coords = np.array([site.coords for site in cluster])
-    centroid = np.mean(cart_coords, axis=0)
-    return centroid
-
-
 def generate_supercell(structure, supercell_matrix=(2, 2, 2)):
     """
     Generate a supercell from a structure.
