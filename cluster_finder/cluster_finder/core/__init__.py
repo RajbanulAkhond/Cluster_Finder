@@ -26,5 +26,5 @@ from .simple_search import (
     find_trimers,
     analyze_compound_trimers,
     print_trimer_results,
-    find_trimers_in_materials
+    search_and_analyze_trimers
 )
