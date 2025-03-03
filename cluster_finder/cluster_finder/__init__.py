@@ -28,6 +28,13 @@ from .core.clusters import (
     calculate_centroid
 )
 
+# Import simple search functionality
+from .core.simple_search import (
+    find_trimers,
+    analyze_compound_trimers,
+    print_trimer_results
+)
+
 # Import visualization functionality
 from .visualization.visualize import (
     visualize_graph,
