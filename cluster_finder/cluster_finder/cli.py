@@ -67,71 +67,51 @@ def get_parser():
 
 
 def find_command(args):
-    """
-    Execute the find command to identify clusters in a structure.
-    
-    Parameters:
-        args (Namespace): Command-line arguments
-    """
+    """Find clusters in a structure."""
     # Load structure
     structure = Structure.from_file(args.structure_file)
+    print(f"\nFound {len(structure)} sites in {structure.composition.reduced_formula}")
+
+    # Create connectivity matrix
+    matrix, indices = create_connectivity_matrix(structure, args.elements, args.radius)
     
-    # Determine elements to use
-    if args.elements:
-        elements = args.elements
-    else:
-        elements = get_transition_metals()
+    # Create graph
+    graph = structure_to_graph(matrix)
     
     # Find clusters
-    connectivity_matrix, tm_indices = create_connectivity_matrix(
-        structure, elements, cutoff=args.radius
-    )
-    graph = structure_to_graph(connectivity_matrix)
-    clusters = find_clusters(structure, graph, tm_indices, min_cluster_size=args.min_size)
-    
-    if not clusters:
-        print(f"No clusters found in {args.structure_file}")
-        return
+    clusters = find_clusters(graph, indices, args.min_size)
     
     # Analyze clusters
-    analyzed_clusters = analyze_clusters(clusters, structure.lattice, cluster_size=args.min_size+1)
+    analyzed_clusters = analyze_clusters(clusters, structure)
     
-    # Determine output prefix
-    if args.output:
-        output_prefix = args.output
-    else:
-        output_prefix = os.path.splitext(os.path.basename(args.structure_file))[0]
-    
-    # Create result object
+    # Prepare output data
     result = {
-        "structure_file": args.structure_file,
         "formula": structure.composition.reduced_formula,
-        "num_clusters": len(analyzed_clusters),
-        "clusters": analyzed_clusters,
-        "structure": structure.as_dict()
+        "clusters": [{
+            "size": cluster["size"],
+            "average_distance": float(cluster["average_distance"]),  # Convert numpy float to native float
+            "centroid": [float(x) for x in cluster["centroid"]],  # Convert numpy array to list of floats
+            "elements": [site.specie.symbol for site in cluster["sites"]]
+        } for cluster in analyzed_clusters]
     }
-    
-    # Save structure with clusters
-    if not args.no_vis:
-        try:
-            import matplotlib.pyplot as plt
-            fig = visualize_clusters_in_compound(structure, analyzed_clusters)
-            plt.savefig(f"{output_prefix}_clusters.png", dpi=300)
-            print(f"Saved cluster visualization to {output_prefix}_clusters.png")
-        except Exception as e:
-            print(f"Error creating visualization: {e}")
-    
-    # Save results to JSON
-    with open(f"{output_prefix}_clusters.json", 'w') as f:
+
+    # Save results
+    output_base = args.output or "clusters"
+    json_file = f"{output_base}_clusters.json"
+    os.makedirs(os.path.dirname(json_file), exist_ok=True)
+    with open(json_file, "w") as f:
         json.dump(result, f, indent=2)
-    print(f"Saved cluster data to {output_prefix}_clusters.json")
-    
-    # Print summary
+    print(f"Saved cluster data to {json_file}")
+
+    # Visualize if requested
+    if not args.no_vis:
+        import matplotlib.pyplot as plt
+        fig = visualize_clusters_in_compound(structure, analyzed_clusters)
+        png_file = f"{output_base}_clusters.png"
+        plt.savefig(png_file)
+        print(f"Saved cluster visualization to {png_file}")
+
     print(f"\nFound {len(analyzed_clusters)} clusters in {structure.composition.reduced_formula}")
-    for i, cluster in enumerate(analyzed_clusters):
-        elements = [site.specie.symbol for site in cluster["sites"]]
-        print(f"Cluster {i+1}: {len(elements)} atoms ({', '.join(elements)}), "
-              f"avg. distance: {cluster['average_distance']:.3f} Å")
 
 
 def analyze_command(args):

@@ -10,6 +10,27 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 import numpy as np
 import networkx as nx
 
+def calculate_centroid(sites, lattice=None):
+    """
+    Calculate the centroid of a group of sites.
+    
+    Parameters:
+        sites (list): List of pymatgen Site objects
+        lattice (Lattice, optional): Lattice object for periodic boundary conditions
+        
+    Returns:
+        numpy.ndarray: Centroid coordinates
+    """
+    coords = np.array([site.coords for site in sites])
+    if lattice is not None:
+        # Apply periodic boundary conditions if lattice is provided
+        frac_coords = lattice.get_fractional_coords(coords)
+        # Wrap to [0, 1)
+        frac_coords = frac_coords % 1.0
+        # Convert back to cartesian
+        coords = lattice.get_cartesian_coords(frac_coords)
+    return np.mean(coords, axis=0)
+
 def find_non_equivalent_positions(structure, transition_metals):
     """
     Find non-equivalent transition metal atom positions in a structure.

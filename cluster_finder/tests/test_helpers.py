@@ -5,10 +5,15 @@ Tests for utility helper functions of the cluster_finder package.
 import pytest
 import numpy as np
 from unittest.mock import patch, MagicMock
+from pymatgen.core.structure import Structure
 
 from cluster_finder.utils.helpers import (
     get_transition_metals,
-    generate_rotation_matrix
+    generate_rotation_matrix,
+    search_transition_metal_compounds,
+    calculate_metal_distances,
+    find_trimers,
+    search_and_analyze_trimers
 )
 
 
@@ -55,35 +60,34 @@ class TestHelpers:
     def test_calculate_metal_distances_mock(self, mock_mprester):
         """Test calculating metal distances using mocked MPRester."""
         from cluster_finder.utils.helpers import calculate_metal_distances
-        
+        from pymatgen.core.structure import Structure
+
         # Create a mock structure and result
         mock_structure = MagicMock()
         mock_structure.__iter__.return_value = [MagicMock(), MagicMock()]
-        
+
         mock_site1 = MagicMock()
         mock_site2 = MagicMock()
         mock_site1.distance.return_value = 2.5
-        
+
         mock_structure.__getitem__.side_effect = [mock_site1, mock_site2]
-        
+
         # Set up mock MPRester instance
         mock_mpr_instance = MagicMock()
         mock_mprester.return_value.__enter__.return_value = mock_mpr_instance
-        
+
         # Set up mock search results
         mock_result = MagicMock()
         mock_result.structure.as_dict.return_value = {"mock": "structure"}
         mock_mpr_instance.materials.summary.search.return_value = [mock_result]
-        
+
         # Mock Structure.from_dict to return our mock structure
-        with patch('cluster_finder.utils.helpers.Structure.from_dict', return_value=mock_structure):
-            # Call the function with mocked dependencies
-            result = calculate_metal_distances(["Fe"], "fake_api_key")
-        
-        # Check that the function returned expected results
-        assert isinstance(result, dict)
-        assert "Fe" in result
-        assert result["Fe"] == 2.5
+        with patch('pymatgen.core.structure.Structure.from_dict', return_value=mock_structure):
+            # Test the function
+            distances = calculate_metal_distances("Fe3O4", ["Fe"])
+            assert isinstance(distances, list)
+            assert len(distances) > 0
+            assert distances[0] == 2.5
     
     @patch('cluster_finder.utils.helpers.MPRester')
     def test_search_transition_metal_compounds_mock(self, mock_mprester):
@@ -109,4 +113,61 @@ class TestHelpers:
         mock_mpr_instance.materials.summary.search.assert_called_once()
         
         # Check that it returned the expected results
-        assert result == ["result1", "result2"] 
+        assert result == ["result1", "result2"]
+
+    def test_calculate_metal_distances_mock(self):
+        """Test calculate_metal_distances with mocked dependencies."""
+        # Create mock structure
+        mock_structure = MagicMock()
+        mock_structure.get_distance.return_value = 2.5
+        
+        # Create mock sites
+        mock_sites = [MagicMock(), MagicMock()]
+        
+        # Calculate distances
+        distances = calculate_metal_distances(mock_structure, mock_sites)
+        
+        # Check result
+        assert isinstance(distances, list)
+        assert distances[0] == 2.5
+        mock_structure.get_distance.assert_called_once()
+
+    def test_find_trimers_mock(self):
+        """Test find_trimers with mocked dependencies."""
+        # Create mock structure and sites
+        mock_structure = MagicMock()
+        mock_structure.get_distance.return_value = 2.5
+        
+        mock_sites = [MagicMock() for _ in range(3)]
+        
+        # Mock distances to form a triangle
+        distances = [2.5, 2.5, 2.5]  # All sides equal
+        
+        with patch('cluster_finder.utils.helpers.calculate_metal_distances', return_value=distances):
+            # Find trimers
+            trimers = find_trimers(mock_structure, mock_sites, max_distance=3.0)
+            
+            # Check result
+            assert isinstance(trimers, list)
+            assert len(trimers) == 1  # Should find one trimer
+            assert len(trimers[0]) == 3  # Each trimer should have 3 sites
+
+    def test_search_and_analyze_trimers_mock(self):
+        """Test search_and_analyze_trimers with mocked dependencies."""
+        # Create mock structure
+        mock_structure = MagicMock()
+        mock_structure.composition.reduced_formula = "Fe2O3"
+        
+        # Mock trimer results
+        mock_trimers = [[MagicMock() for _ in range(3)]]
+        
+        with patch('cluster_finder.utils.helpers.find_trimers', return_value=mock_trimers):
+            # Search and analyze trimers
+            results = search_and_analyze_trimers(mock_structure, elements=["Fe"], max_distance=3.0)
+            
+            # Check results
+            assert isinstance(results, dict)
+            assert "formula" in results
+            assert results["formula"] == "Fe2O3"
+            assert "trimers" in results
+            assert isinstance(results["trimers"], list) 

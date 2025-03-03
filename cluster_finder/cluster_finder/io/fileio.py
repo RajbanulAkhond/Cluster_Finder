@@ -8,21 +8,26 @@ import pandas as pd
 import numpy as np
 from pymatgen.core.structure import Structure
 from pymatgen.io.cif import CifWriter
+import os
 
 
-def export_structure_to_cif(structure, filename="output.cif"):
-    """
-    Export a pymatgen Structure to a CIF file.
+def export_structure_to_cif(structure, filename):
+    """Export structure to CIF file.
     
-    Parameters:
-        structure (Structure): A pymatgen Structure object
+    Args:
+        structure (Structure): Pymatgen structure object
         filename (str): Output filename
         
     Returns:
-        str: Path to the saved file
+        str: Path to the output file
     """
-    writer = CifWriter(structure)
+    # Create output directory if it doesn't exist
+    os.makedirs(os.path.dirname(filename) or '.', exist_ok=True)
+    
+    # Write structure to CIF file without symmetry analysis
+    writer = CifWriter(structure, symprec=None)
     writer.write_file(filename)
+    
     return filename
 
 

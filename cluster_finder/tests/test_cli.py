@@ -54,8 +54,16 @@ class TestCLI:
         mock_graph.return_value = MagicMock()
         mock_find.return_value = ["cluster1"]
         
+        # Create mock sites with proper specie attribute
+        mock_site1 = MagicMock()
+        mock_site2 = MagicMock()
+        mock_specie = MagicMock()
+        mock_specie.symbol = "Fe"
+        mock_site1.specie = mock_specie
+        mock_site2.specie = mock_specie
+        
         mock_cluster = {
-            "sites": ["site1", "site2"],
+            "sites": [mock_site1, mock_site2],
             "size": 2,
             "average_distance": 3.0,
             "centroid": [0, 0, 0]
@@ -220,4 +228,52 @@ class TestCLI:
         mock_args.command = None
         main()
         mock_parser_instance.print_help.assert_called()
-        mock_exit.assert_called_with(1) 
+        mock_exit.assert_called_with(1)
+
+    def test_find_command(self, tmp_path):
+        """Test find command."""
+        # Create mock args
+        args = MagicMock()
+        args.structure_file = "test.cif"
+        args.elements = ["Fe"]
+        args.radius = 3.0
+        args.min_size = 2
+        args.output = str(tmp_path / "test")
+        args.no_vis = True
+
+        # Mock structure
+        mock_structure = MagicMock()
+        mock_structure.composition.reduced_formula = "Fe2O3"
+        mock_structure.__len__.return_value = 5
+
+        # Mock cluster data
+        mock_clusters = [{
+            "size": 2,
+            "average_distance": 2.5,
+            "centroid": [1.0, 1.0, 1.0],
+            "sites": [MagicMock(specie=MagicMock(symbol="Fe")) for _ in range(2)]
+        }]
+
+        # Set up mocks
+        with patch("cluster_finder.cli.Structure.from_file", return_value=mock_structure), \
+             patch("cluster_finder.cli.create_connectivity_matrix", return_value=([], [])), \
+             patch("cluster_finder.cli.structure_to_graph", return_value=MagicMock()), \
+             patch("cluster_finder.cli.find_clusters", return_value=[]), \
+             patch("cluster_finder.cli.analyze_clusters", return_value=mock_clusters):
+            
+            # Run command
+            find_command(args)
+
+            # Check output file exists
+            json_file = tmp_path / "test_clusters.json"
+            assert json_file.exists()
+
+            # Verify JSON content
+            with open(json_file) as f:
+                data = json.load(f)
+                assert data["formula"] == "Fe2O3"
+                assert len(data["clusters"]) == 1
+                assert data["clusters"][0]["size"] == 2
+                assert data["clusters"][0]["average_distance"] == 2.5
+                assert data["clusters"][0]["centroid"] == [1.0, 1.0, 1.0]
+                assert data["clusters"][0]["elements"] == ["Fe", "Fe"] 

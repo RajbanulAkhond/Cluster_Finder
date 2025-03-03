@@ -8,45 +8,22 @@ import numpy as np
 from mp_api.client import MPRester
 
 
-def calculate_metal_distances(metal_list, api_key):
-    """
-    Calculate the minimum distance between atoms in pure metallic elements.
+def calculate_metal_distances(structure, sites):
+    """Calculate distances between metal sites.
     
-    Parameters:
-        metal_list (list): List of metal element symbols
-        api_key (str): Materials Project API key
+    Args:
+        structure (Structure): Pymatgen structure object
+        sites (list): List of sites to calculate distances between
         
     Returns:
-        dict: Dictionary of metals and their minimum interatomic distances
+        list: List of distances between sites
     """
-    distances = {}
-    with MPRester(api_key) as mpr:
-        for metal in metal_list:
-            results = mpr.materials.summary.search(
-                elements=[metal], 
-                energy_above_hull=(0, 0), 
-                num_elements=(1, 1), 
-                fields=["structure"]
-            )
+    distances = []
+    for i in range(len(sites)):
+        for j in range(i+1, len(sites)):
+            distance = structure.get_distance(sites[i], sites[j])
+            distances.append(distance)
             
-            if results:
-                from pymatgen.core.structure import Structure
-                structure = Structure.from_dict(results[0].structure.as_dict())
-                metal_sites = list(structure)
-                
-                # Calculate minimum distance between sites
-                if len(metal_sites) > 1:
-                    distances[metal] = min(
-                        site.distance(other_site) 
-                        for i, site in enumerate(metal_sites) 
-                        for other_site in metal_sites[i+1:]
-                    )
-                else:
-                    # If only one atom in unit cell, use lattice parameter
-                    distances[metal] = structure.lattice.a
-            else:
-                distances[metal] = None
-                
     return distances
 
 
@@ -135,3 +112,77 @@ def generate_rotation_matrix(axis=None, angle=None):
     )
     
     return rotation_matrix 
+
+
+def find_trimers(structure, sites, max_distance):
+    """Find trimers in a list of sites.
+    
+    Args:
+        structure (Structure): Pymatgen structure object
+        sites (list): List of sites to search for trimers
+        max_distance (float): Maximum distance between sites to be considered connected
+        
+    Returns:
+        list: List of trimers, where each trimer is a list of 3 sites
+    """
+    trimers = []
+    n_sites = len(sites)
+    
+    # Need at least 3 sites to form a trimer
+    if n_sites < 3:
+        return trimers
+        
+    # Check all possible combinations of 3 sites
+    for i in range(n_sites):
+        for j in range(i+1, n_sites):
+            for k in range(j+1, n_sites):
+                # Calculate distances between all pairs
+                d_ij = structure.get_distance(sites[i], sites[j])
+                d_jk = structure.get_distance(sites[j], sites[k])
+                d_ik = structure.get_distance(sites[i], sites[k])
+                
+                # Check if all distances are within max_distance
+                if all(d <= max_distance for d in [d_ij, d_jk, d_ik]):
+                    trimers.append([sites[i], sites[j], sites[k]])
+                    
+    return trimers
+
+
+def search_and_analyze_trimers(structure, elements, max_distance):
+    """Search for and analyze trimers in a structure.
+    
+    Args:
+        structure (Structure): Pymatgen structure object
+        elements (list): List of elements to consider
+        max_distance (float): Maximum distance between sites to be considered connected
+        
+    Returns:
+        dict: Dictionary containing formula and trimer information
+    """
+    # Get metal sites
+    metal_sites = [i for i, site in enumerate(structure) 
+                  if str(site.specie) in elements]
+    
+    # Find trimers
+    trimers = find_trimers(structure, metal_sites, max_distance)
+    
+    # Analyze trimers
+    trimer_info = []
+    for trimer in trimers:
+        # Calculate average distance
+        distances = calculate_metal_distances(structure, trimer)
+        avg_distance = sum(distances) / len(distances)
+        
+        # Get elements
+        elements = [structure[site].specie.symbol for site in trimer]
+        
+        trimer_info.append({
+            "sites": trimer,
+            "average_distance": avg_distance,
+            "elements": elements
+        })
+    
+    return {
+        "formula": structure.composition.reduced_formula,
+        "trimers": trimer_info
+    } 

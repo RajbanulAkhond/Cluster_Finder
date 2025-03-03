@@ -35,24 +35,27 @@ def find_clusters(structure, graph, tm_indices, min_cluster_size=DEFAULT_CLUSTER
     return clusters
 
 
-def calculate_average_distance(cluster, max_radius=DEFAULT_MAX_RADIUS):
+def calculate_average_distance(sites, max_radius=3.5):
     """
-    Calculate the average distance between atoms in a cluster.
+    Calculate average distance between sites in a cluster.
     
     Parameters:
-        cluster (list): List of pymatgen Site objects
-        max_radius (float): Maximum radius to consider
+        sites (list): List of pymatgen Site objects
+        max_radius (float): Maximum radius to consider for distances
         
     Returns:
-        float: Average distance
+        float: Average distance between sites
     """
     distances = []
-    for i, site1 in enumerate(cluster):
-        for j, site2 in enumerate(cluster[i+1:], start=i+1):
-            distance = site1.distance(site2)
-            if distance <= max_radius:
-                distances.append(distance)
-    return np.mean(distances) if distances else float('inf')
+    for i in range(len(sites)):
+        for j in range(i + 1, len(sites)):
+            dist = sites[i].distance(sites[j])
+            if dist <= max_radius:
+                distances.append(dist)
+    
+    if not distances:
+        return float('inf')  # Return infinity if no valid distances found
+    return sum(distances) / len(distances)
 
 
 def calculate_centroid(cluster, lattice):
@@ -71,30 +74,34 @@ def calculate_centroid(cluster, lattice):
     return centroid
 
 
-def build_graph(cluster, cutoff, distances_cache=None):
+def build_graph(sites, cutoff=3.5, distances_cache=None):
     """
-    Build a graph from a cluster based on distance cutoff.
+    Build a graph from a list of sites.
     
     Parameters:
-        cluster (list): List of pymatgen Site objects
-        cutoff (float): Distance cutoff for connections
-        distances_cache (dict, optional): Cache of precomputed distances
+        sites (list): List of pymatgen Site objects
+        cutoff (float): Maximum distance for connectivity
+        distances_cache (dict, optional): Cache of pre-computed distances
         
     Returns:
-        networkx.Graph: Graph representation of the cluster
+        networkx.Graph: Graph representation of connectivity
     """
     G = nx.Graph()
-    for i in range(len(cluster)):
-        for j in range(i+1, len(cluster)):
-            if distances_cache is not None and (i, j) in distances_cache:
-                distance = distances_cache[(i, j)]
+    G.add_nodes_from(range(len(sites)))
+    
+    for i in range(len(sites)):
+        for j in range(i + 1, len(sites)):
+            if distances_cache is not None:
+                key = tuple(sorted([i, j]))
+                if key not in distances_cache:
+                    distances_cache[key] = sites[i].distance(sites[j])
+                distance = distances_cache[key]
             else:
-                distance = cluster[i].distance(cluster[j])
-                if distances_cache is not None:
-                    distances_cache[(i, j)] = distance
-                    
+                distance = sites[i].distance(sites[j])
+            
             if distance <= cutoff:
                 G.add_edge(i, j)
+    
     return G
 
 
