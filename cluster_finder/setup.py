@@ -25,12 +25,12 @@ setup(
     ],
     python_requires=">=3.7",
     install_requires=[
-        "numpy>=1.20.0",
-        "matplotlib>=3.3.0",
-        "pymatgen>=2022.0.0",
-        "networkx>=2.5.0",
-        "pandas>=1.3.0",
-        "mp-api>=0.30.1",
+        "numpy>=1.20.0,<1.27.0",
+        "matplotlib>=3.3.0,<4.0.0",
+        "pymatgen>=2023.0.0,<=2024.9.0",
+        "networkx>=2.5.0,<3.3.0",
+        "pandas>=1.3.0,<2.3.0",
+        "mp-api>=0.30.1,<=0.46.0",
     ],
     extras_require={
         "dev": [

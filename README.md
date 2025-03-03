@@ -36,6 +36,28 @@ pip install -e .
 - pandas
 - mp-api (Materials Project API)
 
+## Library Compatibility
+
+For the best experience, we recommend using the following library versions that have been tested and confirmed to work together:
+
+```
+numpy==1.26.4
+matplotlib==3.9.4
+pymatgen==2024.8.9
+networkx==3.2.1
+pandas==2.2.3
+mp-api==0.45.3
+pytest==8.0.2
+```
+
+These versions are pinned in the `requirements.txt` file. To install these specific versions:
+
+```bash
+pip install -r requirements.txt
+```
+
+Note: If you encounter any import errors related to `SymmetryUndeterminedError` from `pymatgen.symmetry.analyzer`, make sure to use a compatible version of pymatgen and mp-api. Recent versions of pymatgen may have changed the location of certain classes, which can cause compatibility issues with packages like `emmet-core` that mp-api depends on.
+
 ## Quick Start
 
 ### Command Line Usage
