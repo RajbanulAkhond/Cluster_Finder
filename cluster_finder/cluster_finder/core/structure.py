@@ -110,4 +110,55 @@ def generate_supercell(structure, supercell_matrix=(2, 2, 2)):
     Returns:
         Structure: Supercell structure
     """
-    return structure.make_supercell(supercell_matrix) 
+    return structure.make_supercell(supercell_matrix)
+
+
+def generate_lattice_with_clusters(structure, clusters, tolerance=1e-5):
+    """
+    Generate a structure with cluster centroids as sites.
+    
+    Parameters:
+        structure (Structure): Original pymatgen Structure
+        clusters (list): List of cluster dictionaries
+        tolerance (float): Tolerance for fractional coordinate comparison
+        
+    Returns:
+        Structure: New structure with cluster centroids as sites
+    """
+    # Get original lattice
+    lattice = structure.lattice
+    
+    # Extract centroids
+    centroids = [cluster["centroid"] for cluster in clusters]
+    
+    # Convert centroids to fractional coordinates
+    frac_coords = [lattice.get_fractional_coords(centroid) for centroid in centroids]
+    
+    # Remove duplicates (due to periodic boundary conditions)
+    unique_frac_coords = []
+    unique_indices = []
+    
+    for i, coord in enumerate(frac_coords):
+        # Normalize fractional coordinates to [0, 1)
+        normalized_coord = np.mod(coord, 1.0)
+        
+        # Check if this is a duplicate
+        is_duplicate = False
+        for existing_coord in unique_frac_coords:
+            if np.allclose(normalized_coord, existing_coord, atol=tolerance):
+                is_duplicate = True
+                break
+                
+        if not is_duplicate:
+            unique_frac_coords.append(normalized_coord)
+            unique_indices.append(i)
+    
+    # Create a new structure with centroids as dummy atoms
+    cluster_structure = Structure(
+        lattice=lattice,
+        species=["X"] * len(unique_frac_coords),  # Use "X" as dummy element
+        coords=unique_frac_coords,
+        coords_are_cartesian=False
+    )
+    
+    return cluster_structure 

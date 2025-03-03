@@ -25,127 +25,81 @@ def export_structure_to_cif(structure, filename):
     os.makedirs(os.path.dirname(filename) or '.', exist_ok=True)
     
     # Write structure to CIF file without symmetry analysis
-    writer = CifWriter(structure, symprec=None)
+    # and without magnetic moments to avoid occupancy issues
+    writer = CifWriter(structure, symprec=None, write_magmoms=False)
     writer.write_file(filename)
     
     return filename
 
 
-def generate_lattice_with_clusters(structure, clusters, tolerance=1e-5):
-    """
-    Generate a structure with cluster centroids as sites.
-    
-    Parameters:
-        structure (Structure): Original pymatgen Structure
-        clusters (list): List of cluster dictionaries
-        tolerance (float): Tolerance for fractional coordinate comparison
-        
-    Returns:
-        Structure: New structure with cluster centroids as sites
-    """
-    # Get original lattice
-    lattice = structure.lattice
-    
-    # Extract centroids
-    centroids = [cluster["centroid"] for cluster in clusters]
-    
-    # Convert centroids to fractional coordinates
-    frac_coords = [lattice.get_fractional_coords(centroid) for centroid in centroids]
-    
-    # Remove duplicates (due to periodic boundary conditions)
-    unique_frac_coords = []
-    unique_indices = []
-    
-    for i, coord in enumerate(frac_coords):
-        # Normalize fractional coordinates to [0, 1)
-        normalized_coord = np.mod(coord, 1.0)
-        
-        # Check if this is a duplicate
-        is_duplicate = False
-        for existing_coord in unique_frac_coords:
-            if np.allclose(normalized_coord, existing_coord, atol=tolerance):
-                is_duplicate = True
-                break
-                
-        if not is_duplicate:
-            unique_frac_coords.append(normalized_coord)
-            unique_indices.append(i)
-    
-    # Create a new structure with centroids as dummy atoms
-    cluster_structure = Structure(
-        lattice=lattice,
-        species=["X"] * len(unique_frac_coords),  # Use "X" as dummy element
-        coords=unique_frac_coords,
-        coords_are_cartesian=False
-    )
-    
-    return cluster_structure
-
-
 def import_csv_data(filename):
-    """
-    Import data from a CSV file.
+    """Import cluster data from CSV file.
     
-    Parameters:
-        filename (str): Path to the CSV file
+    Args:
+        filename (str): Input CSV filename
         
     Returns:
-        pandas.DataFrame: DataFrame containing the data
+        pandas.DataFrame: DataFrame containing cluster data
     """
     return pd.read_csv(filename)
 
 
 def export_csv_data(df, filename):
-    """
-    Export data to a CSV file.
+    """Export cluster data to CSV file.
     
-    Parameters:
-        df (pandas.DataFrame): DataFrame to export
+    Args:
+        df (pandas.DataFrame): DataFrame containing cluster data
         filename (str): Output filename
         
     Returns:
-        str: Path to the saved file
+        str: Path to the output file
     """
+    # Create output directory if it doesn't exist
+    os.makedirs(os.path.dirname(filename) or '.', exist_ok=True)
+    
+    # Export to CSV
     df.to_csv(filename, index=False)
+    
     return filename
 
 
 def postprocess_clusters(csv_filename):
     """
-    Post-process cluster data from a CSV file for further analysis.
+    Post-process cluster data from CSV file.
     
-    Parameters:
+    This function:
+    1. Reads the CSV file
+    2. Converts string representations of lists to actual lists
+    3. Calculates derived properties
+    
+    Args:
         csv_filename (str): Path to the CSV file
         
     Returns:
         pandas.DataFrame: Processed DataFrame
     """
-    # Load data
+    # Read CSV file
     df = pd.read_csv(csv_filename)
     
-    # Process cluster_sizes column
-    if 'cluster_sizes' in df.columns:
-        df['cluster_sizes'] = df['cluster_sizes'].apply(lambda x: eval(x) if isinstance(x, str) else x)
+    # Convert string lists to actual lists
+    for col in ["cluster_sizes", "average_distance"]:
+        if col in df.columns:
+            df[col] = df[col].apply(eval)
     
-    # Process average_distance column
-    if 'average_distance' in df.columns:
-        df['average_distance'] = df['average_distance'].apply(lambda x: eval(x) if isinstance(x, str) else x)
-    
-    # Process point_groups column if it exists
-    if 'point_groups' in df.columns and df['point_groups'].dtype == object:
-        df['point_groups'] = df['point_groups'].apply(lambda x: eval(x) if isinstance(x, str) else x)
-    
-    # Calculate derived statistics
-    if 'cluster_sizes' in df.columns:
-        df['max_cluster_size'] = df['cluster_sizes'].apply(lambda x: max(x) if x else 0)
-        df['min_cluster_size'] = df['cluster_sizes'].apply(lambda x: min(x) if x else 0)
-        df['has_small_clusters'] = df['min_cluster_size'].apply(lambda x: x <= 3)
-        df['has_large_clusters'] = df['max_cluster_size'].apply(lambda x: x >= 4)
-    
-    # Calculate minimum average distance
-    if 'average_distance' in df.columns:
-        df['min_avg_distance'] = df['average_distance'].apply(
+    # Calculate min_avg_distance for each compound
+    if "average_distance" in df.columns:
+        df["min_avg_distance"] = df["average_distance"].apply(
             lambda x: min(x) if isinstance(x, list) and len(x) > 0 else None
         )
+    
+    # Calculate point group order
+    if "point_group" in df.columns:
+        from ..analysis.analysis import get_point_group_order
+        df["point_group_order"] = df["point_group"].apply(get_point_group_order)
+    
+    # Calculate space group order
+    if "space_group" in df.columns:
+        from ..analysis.analysis import get_space_group_order
+        df["space_group_order"] = df["space_group"].apply(get_space_group_order)
     
     return df 

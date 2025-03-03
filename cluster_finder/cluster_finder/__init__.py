@@ -15,7 +15,8 @@ from .core.structure import (
     find_non_equivalent_positions,
     create_connectivity_matrix,
     generate_supercell,
-    structure_to_graph
+    structure_to_graph,
+    generate_lattice_with_clusters
 )
 
 from .core.clusters import (
@@ -55,7 +56,6 @@ from .analysis.analysis import (
 # Import I/O functionality
 from .io.fileio import (
     export_structure_to_cif,
-    generate_lattice_with_clusters,
     import_csv_data,
     export_csv_data,
     postprocess_clusters
@@ -83,6 +83,7 @@ __all__ = [
     'create_connectivity_matrix',
     'generate_supercell',
     'structure_to_graph',
+    'generate_lattice_with_clusters',
     
     # Core - Clusters
     'calculate_centroid',
@@ -107,12 +108,11 @@ __all__ = [
     
     # I/O
     'export_structure_to_cif',
-    'generate_lattice_with_clusters',
     'import_csv_data',
     'export_csv_data',
     'postprocess_clusters',
     
-    # Utils
+    # Utilities
     'calculate_metal_distances',
     'get_transition_metals',
     'search_transition_metal_compounds',

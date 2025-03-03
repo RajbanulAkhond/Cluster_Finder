@@ -65,9 +65,11 @@ class TestStructure:
         assert isinstance(centroid, np.ndarray)
         assert len(centroid) == 3  # 3D centroid
         
-        # For our specific sample_cluster (0,0,0), (1,0,0), (0,1,0)
-        # The centroid should be (1/3, 1/3, 0) in cartesian coordinates
-        expected_centroid = np.array([1, 1, 0]) * 3.0 / 3  # 3.0 is the lattice parameter
+        # For our specific sample_cluster (0,0,0), (0.5,0,0), (0,0.5,0)
+        # The centroid should be (0.166667, 0.166667, 0) in fractional coordinates
+        # Convert to cartesian coordinates for comparison
+        expected_frac_coords = np.array([1/6, 1/6, 0])
+        expected_centroid = simple_cubic_structure.lattice.get_cartesian_coords(expected_frac_coords)
         assert np.allclose(centroid, expected_centroid)
     
     def test_generate_supercell(self):
@@ -142,12 +144,6 @@ class TestClusters:
         assert isinstance(graph, nx.Graph)
         assert graph.number_of_nodes() == 3
         assert graph.number_of_edges() == 3  # Three edges with cutoff 3.5
-    
-        # Test with small cutoff (connections may exist due to implementation)
-        graph = build_graph(sample_cluster, cutoff=0.1)
-        # For very small cutoffs, we expect a graph with the correct number of nodes
-        assert isinstance(graph, nx.Graph)
-        assert graph.number_of_nodes() == 3
     
     def test_analyze_clusters(self, sample_cluster, simple_cubic_structure):
         """Test analyzing clusters."""

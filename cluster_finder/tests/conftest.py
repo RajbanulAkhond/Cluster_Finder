@@ -29,10 +29,16 @@ def simple_cubic_structure():
     # Create a structure with Fe atoms at corners
     structure = Structure(
         lattice=lattice,
-        species=['Fe', 'Fe', 'Fe', 'Fe', 'Fe', 'Fe', 'Fe', 'Fe'],
+        species=['Fe'] * 8,
         coords=[
-            [0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0],
-            [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]
+            [0.0, 0.0, 0.0],  # Origin
+            [0.5, 0.0, 0.0],  # Face centers
+            [0.0, 0.5, 0.0],
+            [0.5, 0.5, 0.0],
+            [0.0, 0.0, 0.5],
+            [0.5, 0.0, 0.5],
+            [0.0, 0.5, 0.5],
+            [0.5, 0.5, 0.5]   # Body center
         ],
         coords_are_cartesian=False
     )
