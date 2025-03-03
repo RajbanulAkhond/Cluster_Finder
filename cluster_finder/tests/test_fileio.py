@@ -15,8 +15,7 @@ from cluster_finder.io.fileio import (
     export_csv_data
 )
 from cluster_finder.analysis.dataframe import (
-    postprocessed_clusters_dataframe,
-    postprocess_clusters
+    postprocessed_clusters_dataframe
 )
 from cluster_finder.core.structure import calculate_centroid
 
@@ -82,7 +81,7 @@ class TestFileIO:
         # Check that data matches
         pd.testing.assert_frame_equal(df, imported_df)
     
-    def test_postprocess_clusters(self, tmp_path):
+    def test_postprocessed_clusters_dataframe(self, tmp_path):
         """Test postprocessing cluster data."""
         # Create test data
         data = {
@@ -113,8 +112,4 @@ class TestFileIO:
         processed_df2 = postprocessed_clusters_dataframe(df)
         
         # Check that results are the same
-        pd.testing.assert_frame_equal(processed_df, processed_df2)
-        
-        # Test backward compatibility function
-        processed_df3 = postprocess_clusters(str(csv_path))
-        pd.testing.assert_frame_equal(processed_df, processed_df3) 
+        pd.testing.assert_frame_equal(processed_df, processed_df2) 

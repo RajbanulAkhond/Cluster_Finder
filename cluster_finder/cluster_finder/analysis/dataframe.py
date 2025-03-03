@@ -108,26 +108,3 @@ def postprocessed_clusters_dataframe(data_source):
         df["space_group_order"] = df["space_group"].apply(get_space_group_order)
     
     return df
-
-# For backward compatibility
-def postprocess_clusters(csv_filename):
-    """
-    Legacy function for backward compatibility.
-    
-    This function is deprecated and will be removed in a future version.
-    Please use postprocessed_clusters_dataframe() instead.
-    
-    Parameters:
-        csv_filename (str): Path to the CSV file
-        
-    Returns:
-        pandas.DataFrame: Processed DataFrame
-    """
-    import warnings
-    warnings.warn(
-        "postprocess_clusters is deprecated and will be removed in a future version. "
-        "Please use postprocessed_clusters_dataframe instead.",
-        DeprecationWarning, 
-        stacklevel=2
-    )
-    return postprocessed_clusters_dataframe(csv_filename)

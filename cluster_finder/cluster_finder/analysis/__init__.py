@@ -13,8 +13,7 @@ from .postprocess import (
 
 from .dataframe import (
     cluster_compounds_dataframe,
-    postprocessed_clusters_dataframe,
-    postprocess_clusters  # For backward compatibility
+    postprocessed_clusters_dataframe
 )
 
 __all__ = [
@@ -23,6 +22,5 @@ __all__ = [
     'classify_dimensionality',
     'rank_clusters',
     'cluster_compounds_dataframe',
-    'postprocessed_clusters_dataframe',
-    'postprocess_clusters'  # For backward compatibility
+    'postprocessed_clusters_dataframe'
 ]

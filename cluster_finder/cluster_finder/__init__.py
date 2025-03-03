@@ -54,8 +54,7 @@ from .analysis.postprocess import (
 
 from .analysis.dataframe import (
     cluster_compounds_dataframe,
-    postprocessed_clusters_dataframe,
-    postprocess_clusters  # For backward compatibility
+    postprocessed_clusters_dataframe
 )
 
 # Import I/O functionality
@@ -109,7 +108,6 @@ __all__ = [
     'classify_dimensionality',
     'cluster_compounds_dataframe',
     'postprocessed_clusters_dataframe',
-    'postprocess_clusters',  # For backward compatibility
     'rank_clusters',
     
     # I/O
