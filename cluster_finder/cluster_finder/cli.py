@@ -12,9 +12,8 @@ import json
 from pymatgen.core.structure import Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
-from .core.structure import create_connectivity_matrix
+from .core.structure import create_connectivity_matrix, structure_to_graph
 from .core.clusters import (
-    structure_to_graph, 
     find_clusters, 
     analyze_clusters
 )

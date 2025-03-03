@@ -11,11 +11,11 @@ from cluster_finder.core.structure import (
     find_non_equivalent_positions,
     create_connectivity_matrix,
     calculate_centroid,
-    generate_supercell
+    generate_supercell,
+    structure_to_graph
 )
 
 from cluster_finder.core.clusters import (
-    structure_to_graph,
     find_clusters,
     calculate_average_distance,
     build_graph,

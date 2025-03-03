@@ -6,29 +6,11 @@ This module contains functions for finding, analyzing, and manipulating clusters
 
 import numpy as np
 import networkx as nx
-from .structure import calculate_centroid
+from .structure import calculate_centroid, structure_to_graph
 
 # Default constants
 DEFAULT_MAX_RADIUS = 3.5  # Maximum atom-to-atom distance for cluster search
 DEFAULT_CLUSTER_SIZE = 2  # Minimum number of atoms in a cluster
-
-
-def structure_to_graph(connectivity_matrix):
-    """
-    Convert a connectivity matrix to a networkx graph.
-    
-    Parameters:
-        connectivity_matrix (numpy.ndarray): Connectivity matrix
-        
-    Returns:
-        networkx.Graph: Graph representation of connectivity
-    """
-    G = nx.Graph()
-    for i in range(len(connectivity_matrix)):
-        for j in range(len(connectivity_matrix)):
-            if connectivity_matrix[i, j] == 1:
-                G.add_edge(i, j)
-    return G
 
 
 def find_clusters(structure, graph, tm_indices, min_cluster_size=DEFAULT_CLUSTER_SIZE):

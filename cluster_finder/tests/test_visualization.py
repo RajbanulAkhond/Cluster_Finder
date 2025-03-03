@@ -13,8 +13,7 @@ from cluster_finder.visualization.visualize import (
     visualize_clusters_in_compound,
     visualize_cluster_lattice
 )
-from cluster_finder.core.clusters import structure_to_graph
-from cluster_finder.core.structure import calculate_centroid
+from cluster_finder.core.structure import calculate_centroid, structure_to_graph
 
 
 # Use non-interactive backend for testing

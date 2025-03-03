@@ -8,6 +8,7 @@ from pymatgen.core.structure import Structure
 from pymatgen.core.periodic_table import Element
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 import numpy as np
+import networkx as nx
 
 def find_non_equivalent_positions(structure, transition_metals):
     """
@@ -57,6 +58,24 @@ def create_connectivity_matrix(structure, transition_metals, cutoff=3.5):
                 matrix[i, j] = matrix[j, i] = 1
                 
     return matrix, tm_indices
+
+
+def structure_to_graph(connectivity_matrix):
+    """
+    Convert a connectivity matrix to a networkx graph.
+    
+    Parameters:
+        connectivity_matrix (numpy.ndarray): Connectivity matrix
+        
+    Returns:
+        networkx.Graph: Graph representation of connectivity
+    """
+    G = nx.Graph()
+    for i in range(len(connectivity_matrix)):
+        for j in range(len(connectivity_matrix)):
+            if connectivity_matrix[i, j] == 1:
+                G.add_edge(i, j)
+    return G
 
 
 def calculate_centroid(cluster, lattice):
