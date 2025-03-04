@@ -19,6 +19,7 @@ from .core.clusters import (
     find_clusters, 
     analyze_clusters
 )
+from .core.structure import generate_lattice_with_clusters
 from .visualization.visualize import (
     visualize_graph,
     visualize_clusters_in_compound
@@ -209,17 +210,41 @@ def analyze_command(args):
         # Create structure from dict
         structure = Structure.from_dict(data["structure"])
         
-        # Analyze space group
-        analyzer = SpacegroupAnalyzer(structure)
-        space_group = analyzer.get_space_group_symbol()
-        point_group = analyzer.get_point_group_symbol()
+        # Reconstruct cluster objects from JSON data
+        clusters = []
+        for cluster_dict in data["clusters"]:
+            # Create PeriodicSite objects from site dictionaries
+            sites = []
+            for site_dict in cluster_dict.get("sites", []):
+                if isinstance(site_dict, dict) and "species" in site_dict:
+                    try:
+                        sites.append(Structure.from_dict({"lattice": structure.lattice.as_dict(), 
+                                                         "sites": [site_dict]}).sites[0])
+                    except Exception as e:
+                        print(f"Warning: Could not reconstruct site: {e}")
+            
+            # Build a proper cluster object
+            cluster = {
+                "size": cluster_dict["size"],
+                "average_distance": cluster_dict["average_distance"],
+                "centroid": cluster_dict["centroid"],
+                "elements": cluster_dict["elements"],
+                "sites": sites
+            }
+            clusters.append(cluster)
+        
+        # Use generate_lattice_with_clusters function for point group analysis
+        conventional_structure, space_group_symbol, point_groups = generate_lattice_with_clusters(structure, clusters)
         
         # Create compound object
         compound = {
             "material_id": os.path.basename(args.json_file).split('_')[0],
             "formula": data["formula"],
-            "clusters": data["clusters"],
-            "structure": structure
+            "clusters": clusters,
+            "structure": structure,
+            "conventional_structure": conventional_structure,
+            "space_group": space_group_symbol,
+            "point_groups": point_groups
         }
         
         # Create DataFrame
@@ -239,8 +264,9 @@ def analyze_command(args):
             with open(json_file, 'w') as f:
                 json.dump({
                     "formula": data["formula"],
-                    "space_group": space_group,
-                    "point_group": point_group,
+                    "space_group": space_group_symbol,
+                    "point_groups": point_groups,
+                    "conventional_structure": conventional_structure.as_dict(),
                     "num_clusters": len(data["clusters"]),
                     "clusters": data["clusters"]
                 }, f, indent=2)
@@ -248,9 +274,14 @@ def analyze_command(args):
         
         # Print summary
         print(f"\nStructure Analysis for {data['formula']}")
-        print(f"Space Group: {space_group}")
-        print(f"Point Group: {point_group}")
-        print(f"Number of Clusters: {data['num_clusters']}")
+        print(f"Space Group: {space_group_symbol}")
+        
+        # Print point groups information
+        print("Point Groups:")
+        for cluster_label, point_group in point_groups.items():
+            print(f"  {cluster_label}: {point_group}")
+        
+        print(f"Number of Clusters: {len(data['clusters'])}")
         
     except Exception as e:
         print(f"Error in analyze command: {str(e)}", file=sys.stderr)
@@ -270,13 +301,36 @@ def visualize_command(args):
         # Create structure from dict
         structure = Structure.from_dict(data["structure"])
         
+        # Reconstruct cluster objects from JSON
+        clusters = []
+        for cluster_dict in data["clusters"]:
+            # Create PeriodicSite objects from site dictionaries
+            sites = []
+            for site_dict in cluster_dict.get("sites", []):
+                if isinstance(site_dict, dict) and "species" in site_dict:
+                    try:
+                        sites.append(Structure.from_dict({"lattice": structure.lattice.as_dict(), 
+                                                         "sites": [site_dict]}).sites[0])
+                    except Exception as e:
+                        print(f"Warning: Could not reconstruct site: {e}")
+            
+            # Build a proper cluster object
+            cluster = {
+                "size": cluster_dict["size"],
+                "average_distance": cluster_dict["average_distance"],
+                "centroid": cluster_dict["centroid"],
+                "elements": cluster_dict["elements"],
+                "sites": sites
+            }
+            clusters.append(cluster)
+        
         # Determine output prefix
         output_prefix = args.output or os.path.splitext(os.path.basename(args.json_file))[0]
         
         # Create visualization
         try:
             import matplotlib.pyplot as plt
-            fig = visualize_clusters_in_compound(structure, data["clusters"])
+            fig = visualize_clusters_in_compound(structure, clusters)
             
             if args.show:
                 plt.show()
@@ -404,4 +458,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main() 
+    main()
