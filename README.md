@@ -10,10 +10,12 @@ Cluster Finder is a Python package for finding, analyzing, and visualizing atomi
 - Export results to various formats (CIF, CSV, JSON)
 - Command-line interface for easy usage
 - Extensible API for integration into other projects
+- Comprehensive test suite 
+- Detailed cluster statistics and summary reports
 
 ## Installation
 
-### From PyPI (recommended)
+### From PyPI (coming soon)
 
 ```bash
 pip install cluster-finder
@@ -29,16 +31,7 @@ pip install -e .
 
 ## Dependencies
 
-- numpy
-- matplotlib
-- pymatgen
-- networkx
-- pandas
-- mp-api (Materials Project API)
-
-## Library Compatibility
-
-For the best experience, we recommend using the following library versions that have been tested and confirmed to work together:
+The package has been tested with the following versions:
 
 ```
 numpy==1.26.4
@@ -48,6 +41,7 @@ networkx==3.2.1
 pandas==2.2.3
 mp-api==0.45.3
 pytest==8.0.2
+pydantic>=2.0.0
 ```
 
 These versions are pinned in the `requirements.txt` file. To install these specific versions:
@@ -56,7 +50,7 @@ These versions are pinned in the `requirements.txt` file. To install these speci
 pip install -r requirements.txt
 ```
 
-Note: If you encounter any import errors related to `SymmetryUndeterminedError` from `pymatgen.symmetry.analyzer`, make sure to use a compatible version of pymatgen and mp-api. Recent versions of pymatgen may have changed the location of certain classes, which can cause compatibility issues with packages like `emmet-core` that mp-api depends on.
+Note: The package now requires Pydantic v2 or higher for improved data validation and serialization.
 
 ## Quick Start
 
@@ -101,6 +95,10 @@ clusters = cf.find_clusters(structure, graph, tm_indices)
 # Analyze clusters
 analyzed_clusters = cf.analyze_clusters(clusters, structure.lattice)
 
+# Get cluster statistics
+summary = cf.cluster_summary_stat(analyzed_clusters, structure)
+print(summary)
+
 # Visualize
 import matplotlib.pyplot as plt
 fig = cf.visualize_clusters_in_compound(structure, analyzed_clusters)
@@ -114,6 +112,8 @@ For more detailed usage examples and API documentation, see the [example scripts
 ### Key Modules
 
 - `core`: Core functionality for finding and analyzing clusters
+  - `structure.py`: Structure manipulation and cluster identification
+  - `utils.py`: Statistical analysis and data processing
 - `visualization`: Functions for visualizing clusters and structures
 - `analysis`: Advanced analysis of clusters and their properties
 - `io`: Input/output utilities for various file formats
@@ -123,25 +123,21 @@ For more detailed usage examples and API documentation, see the [example scripts
 
 ### Running Tests
 
-To run the test suite, first install the package with development dependencies:
+To run the test suite:
 
 ```bash
 git clone https://github.com/RajbanulAkhond/Cluster_Finder.git
 cd Cluster_Finder
 pip install -e ".[dev]"
+python -m pytest cluster_finder/tests/
 ```
 
-Then run the tests using pytest:
-
-```bash
-pytest
-```
-
-For code coverage report:
-
-```bash
-pytest --cov=cluster_finder
-```
+The test suite includes:
+- Core functionality tests
+- Analysis tests
+- CLI tests
+- File I/O tests
+- Utility tests
 
 ### Code Style
 
@@ -158,15 +154,25 @@ isort cluster_finder tests
 pylint cluster_finder
 ```
 
+## Recent Updates
+
+- Improved package structure and organization
+- Enhanced documentation with comprehensive docstrings
+- Fixed JSON serialization of PeriodicSite objects
+- Updated cluster summary statistics with detailed output
+- Added test structure for examples
+- Fixed entry points in setup.py
+- All 47 tests passing successfully
+
 ## References
 
 If you use this package in your research, please cite:
 
 ```bibtex
-@software{akhond2023clusterfinder,
+@software{akhond2024clusterfinder,
   author = {Akhond, Md. Rajbanul},
   title = {Cluster Finder: A Python package for finding atomic clusters in crystal structures},
-  year = {2023},
+  year = {2025},
   publisher = {GitHub},
   url = {https://github.com/RajbanulAkhond/Cluster_Finder}
 }
