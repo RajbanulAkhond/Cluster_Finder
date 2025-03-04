@@ -11,11 +11,16 @@ setup(
         "pymatgen>=2022.0.0",
         "matplotlib>=3.4.0",
         "mp-api>=0.30.0",
-        "pytest>=6.0.0",
+        "pytest>=6.0.0"
     ],
+    entry_points={
+        'console_scripts': [
+            'cluster_finder=cluster_finder.cli:main',
+        ],
+    },
     author="Your Name",
     author_email="your.email@example.com",
-    description="A package for finding and analyzing atomic clusters in crystal structures",
+    description="A package for finding and analyzing clusters in crystal structures",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/yourusername/cluster_finder",

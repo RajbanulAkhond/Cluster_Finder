@@ -6,7 +6,9 @@ This module contains functions for finding, analyzing, and manipulating clusters
 
 import numpy as np
 import networkx as nx
-from .structure import structure_to_graph
+from pymatgen.core.structure import Structure
+from pymatgen.core.lattice import Lattice
+from .graph import structure_to_graph, create_connectivity_matrix
 
 # Default constants
 DEFAULT_MAX_RADIUS = 3.5  # Maximum atom-to-atom distance for cluster search
@@ -46,16 +48,17 @@ def calculate_average_distance(sites, max_radius=3.5):
     Returns:
         float: Average distance between sites
     """
+    if len(sites) < 2:
+        return 0.0
+    
     distances = []
     for i in range(len(sites)):
-        for j in range(i + 1, len(sites)):
+        for j in range(i+1, len(sites)):
             dist = sites[i].distance(sites[j])
             if dist <= max_radius:
                 distances.append(dist)
     
-    if not distances:
-        return float('inf')  # Return infinity if no valid distances found
-    return sum(distances) / len(distances)
+    return np.mean(distances) if distances else 0.0
 
 
 def calculate_centroid(cluster, lattice):
@@ -234,4 +237,48 @@ def identify_unique_clusters(clusters):
             seen_cluster_keys.add(cluster_key)
             unique_clusters.append(cluster)
     
-    return unique_clusters 
+    return unique_clusters
+
+
+def get_compounds_with_clusters(entries, transition_metals):
+    """
+    Process a list of entries to find and analyze clusters in each compound.
+    
+    Parameters:
+        entries (list): List of entries containing material data
+        transition_metals (list): List of transition metal element symbols
+        
+    Returns:
+        tuple: (compounds_with_clusters, graph, structure, tm_indices) where:
+            - compounds_with_clusters (list): List of dictionaries containing compound data and clusters
+            - graph (networkx.Graph): Graph representation of the last processed structure
+            - structure (Structure): Last processed structure
+            - tm_indices (list): Transition metal indices from the last processed structure
+    """
+    compounds_with_clusters = []
+    graph = None
+    structure = None
+    tm_indices = None
+    
+    for entry in entries:
+        material_id = entry.material_id
+        formula = entry.formula_pretty
+        structure = entry.structure
+        total_magnetization = entry.total_magnetization
+
+        connectivity_matrix, tm_indices = create_connectivity_matrix(structure, transition_metals)
+        graph = structure_to_graph(connectivity_matrix)
+
+        # Find all clusters
+        clusters = find_clusters(structure, graph, tm_indices)
+        analyzed_clusters = analyze_clusters(clusters, structure.lattice)
+
+        compounds_with_clusters.append({
+            "material_id": material_id,
+            "formula": formula,
+            "total_magnetization": total_magnetization,
+            "clusters": analyzed_clusters,
+            "structure": structure
+        })
+    
+    return compounds_with_clusters, graph, structure, tm_indices 
