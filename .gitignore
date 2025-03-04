@@ -169,3 +169,13 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Test output files
+test_output_analysis.json
+test_structure_clusters.csv
+test_structure_clusters.json
+test_structure_clusters.png
+*_clusters.json
+*_clusters.csv
+*_clusters.png
+*_analysis.json
