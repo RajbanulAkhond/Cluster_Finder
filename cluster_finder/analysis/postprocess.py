@@ -9,6 +9,7 @@ import pandas as pd
 import ast
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from ..core.structure import calculate_centroid
+from ..utils.helpers import get_mp_property
 
 # Define mappings for symmetry analysis
 # Point group order mapping (simplified for common point groups)
@@ -153,15 +154,17 @@ def classify_dimensionality(supercell):
     return cluster_type, s_normalized.tolist()
 
 
-def rank_clusters(data_source):
+def rank_clusters(data_source, api_key=None):
     """
-    Rank clusters based on dimensionality, point group order, and space group order.
+    Rank clusters based on dimensionality, point group order, space group order.
     
     Parameters:
         data_source (str or pandas.DataFrame): Path to a CSV file or a pandas DataFrame
+        api_key (str, optional): Materials Project API key. If None, will use the API key
+                               set in the MAPI_KEY environment variable.
         
     Returns:
-        pandas.DataFrame: Sorted DataFrame with additional ranking columns
+        pandas.DataFrame: Sorted DataFrame with additional ranking columns and energy above hull
     """
     if isinstance(data_source, str):
         df = pd.read_csv(data_source)
@@ -188,13 +191,29 @@ def rank_clusters(data_source):
 
     # Calculate space group order
     df_filtered["space_group_order"] = df_filtered["space_group"].apply(get_space_group_order)
-
-    # Calculate rank score (higher is better)
-    df_filtered["rank_score"] = (
-        -df_filtered["min_avg_distance"]  # Lower distance is better (negative to invert)
-        + df_filtered["point_group_order"] / 48  # Normalize by max point group order
-        + df_filtered["space_group_order"] / 230  # Normalize by max space group number
-    )
+    
+    # Add energy above hull from Materials Project
+    if "material_id" in df_filtered.columns:
+        print("Retrieving energy above hull data from Materials Project...")
+        # Create a new column with energy above hull values
+        df_filtered["energy_above_hull"] = df_filtered["material_id"].apply(
+            lambda mp_id: get_mp_property(mp_id, "energy_above_hull", api_key)
+        )
+        
+        # Consider stability in the rank score when available
+        df_filtered["rank_score"] = (
+            -df_filtered["min_avg_distance"]  # Lower distance is better (negative to invert)
+            + df_filtered["point_group_order"] / 48  # Normalize by max point group order
+            + df_filtered["space_group_order"] / 230  # Normalize by max space group number
+            - df_filtered["energy_above_hull"].fillna(1.0) * 2  # Lower energy above hull is better (more stable)
+        )
+    else:
+        # Calculate rank score without energy above hull (higher is better)
+        df_filtered["rank_score"] = (
+            -df_filtered["min_avg_distance"]  # Lower distance is better (negative to invert)
+            + df_filtered["point_group_order"] / 48  # Normalize by max point group order
+            + df_filtered["space_group_order"] / 230  # Normalize by max space group number
+        )
 
     # Sort by rank score in descending order
     df_sorted = df_filtered.sort_values("rank_score", ascending=False)

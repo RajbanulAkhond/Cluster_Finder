@@ -185,4 +185,38 @@ def search_and_analyze_trimers(structure, elements, max_distance):
     return {
         "formula": structure.composition.reduced_formula,
         "trimers": trimer_info
-    } 
+    }
+
+
+def get_mp_property(material_id, property_name, api_key=None):
+    """
+    Retrieve a specific property for a material from the Materials Project database.
+    
+    Parameters:
+        material_id (str): Materials Project ID (e.g., 'mp-149')
+        property_name (str): Name of the property to retrieve (e.g., 'energy_above_hull')
+        api_key (str, optional): Materials Project API key. If None, will use the API key
+                                 set in the MAPI_KEY environment variable.
+    
+    Returns:
+        The requested property value or None if the property or material is not found.
+    
+    Examples:
+        >>> e_hull = get_mp_property('mp-149', 'energy_above_hull')
+        >>> formation_energy = get_mp_property('mp-149', 'formation_energy_per_atom')
+    """
+    try:
+        with MPRester(api_key) as mpr:
+            summary = mpr.materials.summary.search(
+                material_ids=[material_id],
+                fields=[property_name]
+            )
+            
+            if not summary or len(summary) == 0:
+                return None
+                
+            # Get the first (and should be only) result
+            return getattr(summary[0], property_name, None)
+    except Exception as e:
+        print(f"Error retrieving property from Materials Project: {e}")
+        return None 
