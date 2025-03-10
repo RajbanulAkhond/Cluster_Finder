@@ -9,6 +9,8 @@ import os
 import sys
 import argparse
 import json
+import numpy as np
+import pandas as pd
 from typing import List, Optional
 from pathlib import Path
 from pymatgen.core.structure import Structure
@@ -84,6 +86,14 @@ def get_parser():
     summary_parser = subparsers.add_parser('summary', help='Generate summary statistics')
     summary_parser.add_argument('input_file', help='JSON or CSV file with cluster data')
     summary_parser.add_argument('--output', '-o', help='Output file for summary')
+    
+    # Rank clusters based on various criteria
+    rank_parser = subparsers.add_parser('rank', help='Rank clusters based on geometry, symmetry, and stability')
+    rank_parser.add_argument('input_file', help='CSV file with cluster data')
+    rank_parser.add_argument('--output', '-o', help='Output file prefix for ranked data')
+    rank_parser.add_argument('--api-key', help='Materials Project API key (optional, will use environment variable if not provided)')
+    rank_parser.add_argument('--top', type=int, default=None, help='Show only top N ranked clusters')
+    rank_parser.add_argument('--format', choices=['csv', 'json', 'both'], default='csv', help='Output format (default: csv)')
     
     return parser
 
@@ -428,6 +438,66 @@ def summary_command(args):
         sys.exit(1)
 
 
+def rank_command(args):
+    """Rank clusters based on geometry, symmetry, and stability (energy above hull)."""
+    try:
+        # Validate input file
+        validate_input_file(args.input_file, '.csv')
+        
+        print(f"\nRanking clusters from {args.input_file}...")
+        print("This may take some time if retrieving energy_above_hull data from the Materials Project API.")
+        
+        # Rank the clusters
+        ranked_df = rank_clusters(args.input_file, api_key=args.api_key)
+        
+        # Limit to top N if specified
+        if args.top and args.top > 0:
+            ranked_df = ranked_df.head(args.top)
+        
+        # Determine output prefix
+        output_prefix = args.output or os.path.splitext(os.path.basename(args.input_file))[0] + "_ranked"
+        
+        # Save results
+        if args.format in ['csv', 'both']:
+            csv_file = f"{output_prefix}_clusters.csv"
+            export_csv_data(ranked_df, csv_file)
+            print(f"Saved ranked data to {csv_file}")
+        
+        if args.format in ['json', 'both']:
+            json_file = f"{output_prefix}_clusters.json"
+            with open(json_file, 'w') as f:
+                # Convert DataFrame to dict for JSON serialization, handling potential non-serializable objects
+                json_data = []
+                for _, row in ranked_df.iterrows():
+                    row_dict = {col: row[col] for col in ranked_df.columns if not isinstance(row[col], (np.ndarray, list))}
+                    # Convert special types
+                    for col in ranked_df.columns:
+                        if isinstance(row[col], np.ndarray):
+                            row_dict[col] = row[col].tolist()
+                        elif isinstance(row[col], list) and col != 'average_distance':
+                            row_dict[col] = str(row[col])
+                    json_data.append(row_dict)
+                json.dump(json_data, f, indent=2)
+            print(f"Saved ranked data to {json_file}")
+        
+        # Display summary of ranking
+        print(f"\nRanked {len(ranked_df)} clusters based on:")
+        print("- Geometric properties (minimum average distance)")
+        print("- Symmetry (point group and space group order)")
+        if "energy_above_hull" in ranked_df.columns:
+            print("- Stability (energy above hull)")
+            # Show top 3 most stable compounds
+            print("\nTop ranked clusters:")
+            with pd.option_context('display.max_rows', 5, 'display.max_columns', None):
+                print(ranked_df[['material_id', 'formula', 'energy_above_hull', 'rank_score']].head(5))
+        
+    except Exception as e:
+        print(f"Error in rank command: {str(e)}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
 def main():
     """Main entry point for the command-line interface."""
     parser = get_parser()
@@ -449,6 +519,8 @@ def main():
             batch_command(args)
         elif args.command == 'summary':
             summary_command(args)
+        elif args.command == 'rank':
+            rank_command(args)
         else:
             parser.print_help()
             sys.exit(1)
