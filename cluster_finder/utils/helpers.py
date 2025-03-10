@@ -203,6 +203,9 @@ def get_mp_property(material_id, property_name, api_key=None):
     Returns:
         The requested property value or None if the property or material is not found.
     
+    Raises:
+        ValueError: If the API calls fail to retrieve the property
+    
     Examples:
         >>> e_hull = get_mp_property('mp-149', 'energy_above_hull')
         >>> formation_energy = get_mp_property('mp-149', 'formation_energy_per_atom')
@@ -222,7 +225,7 @@ def get_mp_property(material_id, property_name, api_key=None):
         
         # Try multiple approaches to get the data
         
-        # Approach 1: Try MPRester directly (sometimes fails with certain API keys)
+        # Approach 1: Try MPRester directly
         try:
             with MPRester(api_key) as mpr:
                 summary = mpr.materials.summary.search(
@@ -235,19 +238,13 @@ def get_mp_property(material_id, property_name, api_key=None):
         except Exception as e:
             print(f"MPRester approach failed: {e}")
         
-        # Approach 2: Use direct HTTP request to MP API (more robust)
+        # Approach 2: Use direct HTTP request to MP API
         try:
             # Define the base URL for the Materials Project API
             base_url = "https://api.materialsproject.org/materials"
             
             # Set up the headers with the API key
             headers = {"X-API-KEY": api_key}
-            
-            # Define the query parameters
-            params = {
-                "material_ids": clean_material_id,
-                "fields": property_name
-            }
             
             # Make the GET request
             response = requests.get(f"{base_url}/{clean_material_id}", headers=headers)
@@ -259,27 +256,12 @@ def get_mp_property(material_id, property_name, api_key=None):
                     return data[property_name]
                 elif "data" in data and property_name in data["data"][0]:
                     return data["data"][0][property_name]
-            
-            print(f"Direct request (approach 2) failed: Status {response.status_code}")
         except Exception as e:
             print(f"Direct HTTP request approach failed: {e}")
         
-        # Approach 3: Hardcoded values for common materials
-        # This is a fallback for testing or when the API is not accessible
-        common_values = {
-            "mp-149": {"energy_above_hull": 0.0},  # Silicon
-            "mp-2": {"energy_above_hull": 0.0},    # Copper
-            "mp-30": {"energy_above_hull": 0.0},   # Iron
-            "mp-686087": {"energy_above_hull": 0.111},  # Li3(Nb2Cl5)8
-            "mp-570445": {"energy_above_hull": 0.076}   # RbNb3VCl11
-        }
+        # If all approaches fail, raise an error
+        raise ValueError(f"Failed to retrieve {property_name} for material {material_id}. Use a pre-ranked dataset instead.")
         
-        if clean_material_id in common_values and property_name in common_values[clean_material_id]:
-            print(f"Using hardcoded value for {clean_material_id}.{property_name}")
-            return common_values[clean_material_id][property_name]
-        
-        # If all approaches fail, return None
-        return None
     except Exception as e:
         print(f"Error retrieving property from Materials Project: {e}")
-        return None 
+        raise ValueError(f"Failed to retrieve {property_name} for material {material_id}. Use a pre-ranked dataset instead.") 
