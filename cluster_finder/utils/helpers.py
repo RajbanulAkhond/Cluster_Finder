@@ -208,13 +208,13 @@ def get_mp_property(material_id, property_name, api_key=None):
         >>> formation_energy = get_mp_property('mp-149', 'formation_energy_per_atom')
         
     Raises:
-        ValueError: If unable to retrieve property from Materials Project API
+        ValueError: If the API request fails or the property cannot be retrieved
     """
     # Clean up material_id to ensure it's in the correct format
     if material_id is None:
         raise ValueError("Material ID cannot be None")
         
-    # Clean up material_id - extract the standard MP ID format (mp-XXXXX)
+    # Extract the standard MP ID format (mp-XXXXX)
     mp_id_match = re.search(r'(mp-\d+)', str(material_id))
     if mp_id_match:
         clean_material_id = mp_id_match.group(1)
@@ -222,52 +222,82 @@ def get_mp_property(material_id, property_name, api_key=None):
         # If no mp-XXXXX pattern found, use as is, but remove any trailing text
         clean_material_id = str(material_id).split('.')[0].strip()
     
-    error_messages = []
+    print(f"Attempting to retrieve {property_name} for {clean_material_id}")
     
-    # Approach 1: Try MPRester directly
+    # Using the MP API v0.41.1 compatible methods
     try:
         with MPRester(api_key) as mpr:
-            summary = mpr.materials.summary.search(
-                material_ids=[clean_material_id],
-                fields=[property_name]
-            )
-            
-            if summary and len(summary) > 0:
-                result = getattr(summary[0], property_name, None)
-                if result is not None:
-                    return result
-                else:
-                    error_messages.append(f"Property {property_name} not found for {clean_material_id}")
-            else:
-                error_messages.append(f"No data found for {clean_material_id}")
+            # First try the new summary API method
+            try:
+                docs = mpr.summary.search(material_ids=[clean_material_id])
+                if docs and len(docs) > 0:
+                    for doc in docs:
+                        if hasattr(doc, property_name):
+                            return getattr(doc, property_name)
+                    print(f"Property {property_name} not found in summary")
+            except Exception as e1:
+                print(f"Error with summary API call: {e1}")
+                
+            # Then try the materials API method
+            try:
+                docs = mpr.materials.search(material_ids=[clean_material_id])
+                if docs and len(docs) > 0:
+                    for doc in docs:
+                        if hasattr(doc, property_name):
+                            return getattr(doc, property_name)
+                    print(f"Property {property_name} not found in materials")
+            except Exception as e2:
+                print(f"Error with materials API call: {e2}")
+                
+            # Try the direct documents endpoint as a fallback
+            try:
+                # Try the direct query method for the property
+                results = mpr.thermo.search(material_ids=[clean_material_id])
+                if results and len(results) > 0:
+                    for result in results:
+                        if hasattr(result, property_name):
+                            return getattr(result, property_name)
+                    print(f"Property {property_name} not found in thermo")
+            except Exception as e3:
+                print(f"Error with thermo API call: {e3}")
+                
+            # One more fallback for older API versions
+            try:
+                # Use the older get_data method
+                data = mpr.get_data(clean_material_id)
+                if data and len(data) > 0:
+                    if property_name in data[0]:
+                        return data[0][property_name]
+                    print(f"Property {property_name} not found in get_data")
+            except Exception as e4:
+                print(f"Error with get_data call: {e4}")
+                
     except Exception as e:
-        error_messages.append(f"MPRester approach failed: {e}")
+        print(f"Error initializing MPRester: {e}")
     
-    # Approach 2: Use direct HTTP request to MP API
+    # Direct HTTP request as a last resort
     try:
-        # Define the base URL for the Materials Project API
-        base_url = "https://api.materialsproject.org/materials"
-        
-        # Set up the headers with the API key
+        print("Trying direct HTTP request...")
         headers = {"X-API-KEY": api_key}
         
-        # Make the GET request
-        response = requests.get(f"{base_url}/{clean_material_id}", headers=headers)
+        # Try the v2 API endpoint
+        v2_url = f"https://api.materialsproject.org/materials/{clean_material_id}"
+        response = requests.get(v2_url, headers=headers)
         
-        # Check if the request was successful
         if response.status_code == 200:
             data = response.json()
+            # Try to find the property in different locations in the response
             if property_name in data:
                 return data[property_name]
+            elif "data" in data and property_name in data["data"]:
+                return data["data"][property_name]
             elif "data" in data and len(data["data"]) > 0 and property_name in data["data"][0]:
                 return data["data"][0][property_name]
-            else:
-                error_messages.append(f"Property {property_name} not found in API response")
+            print(f"Property {property_name} not found in HTTP response")
         else:
-            error_messages.append(f"API request failed with status code {response.status_code}")
+            print(f"HTTP request failed with status code: {response.status_code}")
     except Exception as e:
-        error_messages.append(f"Direct HTTP request approach failed: {e}")
-    
-    # If all approaches fail, raise an error with the collected error messages
-    error_message = f"Failed to retrieve {property_name} for {material_id}. Errors: {'; '.join(error_messages)}"
-    raise ValueError(error_message) 
+        print(f"Error with direct HTTP request: {e}")
+        
+    # If all attempts fail, raise an error
+    raise ValueError(f"Could not retrieve {property_name} for material {material_id}") 
