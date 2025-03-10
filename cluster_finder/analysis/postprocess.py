@@ -232,22 +232,36 @@ def rank_clusters(data_source, api_key=None):
     # Calculate space group order
     df_filtered["space_group_order"] = df_filtered["space_group"].apply(get_space_group_order)
     
-    # Determine material_id column
-    material_id_col = None
-    for col in ["material_id", "compound_id", "id"]:
-        if col in df_filtered.columns:
-            material_id_col = col
-            break
-    
-    # Add energy above hull from Materials Project
-    if material_id_col:
-        print(f"Retrieving energy above hull data from Materials Project using column '{material_id_col}'...")
-        # Create a new column with energy above hull values
-        df_filtered["energy_above_hull"] = df_filtered[material_id_col].apply(
-            lambda mp_id: get_mp_property(mp_id, "energy_above_hull", api_key)
-        )
+    # Check if energy_above_hull is already present in the dataset
+    if "energy_above_hull" not in df_filtered.columns:
+        # Determine material_id column
+        material_id_col = None
+        for col in ["material_id", "compound_id", "id"]:
+            if col in df_filtered.columns:
+                material_id_col = col
+                break
         
-        # Consider stability in the rank score when available
+        # Add energy above hull from Materials Project
+        if material_id_col:
+            print(f"Retrieving energy above hull data from Materials Project using column '{material_id_col}'...")
+            try:
+                # Create a new column with energy above hull values
+                df_filtered["energy_above_hull"] = df_filtered[material_id_col].apply(
+                    lambda mp_id: get_mp_property(mp_id, "energy_above_hull", api_key)
+                )
+            except ValueError as e:
+                print(f"Error: {str(e)}")
+                print("Using a default value of 1.0 for energy_above_hull for ranking purposes")
+                df_filtered["energy_above_hull"] = 1.0
+        else:
+            print("Warning: No material_id column found. Using default value for energy above hull.")
+            df_filtered["energy_above_hull"] = 1.0  # Default to unstable
+    else:
+        print("Using existing energy_above_hull values from the input dataset")
+        
+    # Calculate rank score (higher is better)
+    if "energy_above_hull" in df_filtered.columns:
+        # Calculate rank score with energy above hull (higher is better)
         df_filtered["rank_score"] = (
             -df_filtered["min_avg_distance"]  # Lower distance is better (negative to invert)
             + df_filtered["point_group_order"] / 48  # Normalize by max point group order
@@ -255,7 +269,6 @@ def rank_clusters(data_source, api_key=None):
             - df_filtered["energy_above_hull"].fillna(1.0) * 2  # Lower energy above hull is better (more stable)
         )
     else:
-        print("Warning: No material_id column found. Skipping energy above hull data.")
         # Calculate rank score without energy above hull (higher is better)
         df_filtered["rank_score"] = (
             -df_filtered["min_avg_distance"]  # Lower distance is better (negative to invert)
