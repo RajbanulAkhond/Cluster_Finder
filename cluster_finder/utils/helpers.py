@@ -203,65 +203,71 @@ def get_mp_property(material_id, property_name, api_key=None):
     Returns:
         The requested property value or None if the property or material is not found.
     
-    Raises:
-        ValueError: If the API calls fail to retrieve the property
-    
     Examples:
         >>> e_hull = get_mp_property('mp-149', 'energy_above_hull')
         >>> formation_energy = get_mp_property('mp-149', 'formation_energy_per_atom')
+        
+    Raises:
+        ValueError: If unable to retrieve property from Materials Project API
     """
+    # Clean up material_id to ensure it's in the correct format
+    if material_id is None:
+        raise ValueError("Material ID cannot be None")
+        
+    # Clean up material_id - extract the standard MP ID format (mp-XXXXX)
+    mp_id_match = re.search(r'(mp-\d+)', str(material_id))
+    if mp_id_match:
+        clean_material_id = mp_id_match.group(1)
+    else:
+        # If no mp-XXXXX pattern found, use as is, but remove any trailing text
+        clean_material_id = str(material_id).split('.')[0].strip()
+    
+    error_messages = []
+    
+    # Approach 1: Try MPRester directly
     try:
-        # Clean up material_id to ensure it's in the correct format
-        if material_id is None:
-            return None
+        with MPRester(api_key) as mpr:
+            summary = mpr.materials.summary.search(
+                material_ids=[clean_material_id],
+                fields=[property_name]
+            )
             
-        # Clean up material_id - extract the standard MP ID format (mp-XXXXX)
-        mp_id_match = re.search(r'(mp-\d+)', str(material_id))
-        if mp_id_match:
-            clean_material_id = mp_id_match.group(1)
-        else:
-            # If no mp-XXXXX pattern found, use as is, but remove any trailing text
-            clean_material_id = str(material_id).split('.')[0].strip()
-        
-        # Try multiple approaches to get the data
-        
-        # Approach 1: Try MPRester directly
-        try:
-            with MPRester(api_key) as mpr:
-                summary = mpr.materials.summary.search(
-                    material_ids=[clean_material_id],
-                    fields=[property_name]
-                )
-                
-                if summary and len(summary) > 0:
-                    return getattr(summary[0], property_name, None)
-        except Exception as e:
-            print(f"MPRester approach failed: {e}")
-        
-        # Approach 2: Use direct HTTP request to MP API
-        try:
-            # Define the base URL for the Materials Project API
-            base_url = "https://api.materialsproject.org/materials"
-            
-            # Set up the headers with the API key
-            headers = {"X-API-KEY": api_key}
-            
-            # Make the GET request
-            response = requests.get(f"{base_url}/{clean_material_id}", headers=headers)
-            
-            # Check if the request was successful
-            if response.status_code == 200:
-                data = response.json()
-                if property_name in data:
-                    return data[property_name]
-                elif "data" in data and property_name in data["data"][0]:
-                    return data["data"][0][property_name]
-        except Exception as e:
-            print(f"Direct HTTP request approach failed: {e}")
-        
-        # If all approaches fail, raise an error
-        raise ValueError(f"Failed to retrieve {property_name} for material {material_id}. Use a pre-ranked dataset instead.")
-        
+            if summary and len(summary) > 0:
+                result = getattr(summary[0], property_name, None)
+                if result is not None:
+                    return result
+                else:
+                    error_messages.append(f"Property {property_name} not found for {clean_material_id}")
+            else:
+                error_messages.append(f"No data found for {clean_material_id}")
     except Exception as e:
-        print(f"Error retrieving property from Materials Project: {e}")
-        raise ValueError(f"Failed to retrieve {property_name} for material {material_id}. Use a pre-ranked dataset instead.") 
+        error_messages.append(f"MPRester approach failed: {e}")
+    
+    # Approach 2: Use direct HTTP request to MP API
+    try:
+        # Define the base URL for the Materials Project API
+        base_url = "https://api.materialsproject.org/materials"
+        
+        # Set up the headers with the API key
+        headers = {"X-API-KEY": api_key}
+        
+        # Make the GET request
+        response = requests.get(f"{base_url}/{clean_material_id}", headers=headers)
+        
+        # Check if the request was successful
+        if response.status_code == 200:
+            data = response.json()
+            if property_name in data:
+                return data[property_name]
+            elif "data" in data and len(data["data"]) > 0 and property_name in data["data"][0]:
+                return data["data"][0][property_name]
+            else:
+                error_messages.append(f"Property {property_name} not found in API response")
+        else:
+            error_messages.append(f"API request failed with status code {response.status_code}")
+    except Exception as e:
+        error_messages.append(f"Direct HTTP request approach failed: {e}")
+    
+    # If all approaches fail, raise an error with the collected error messages
+    error_message = f"Failed to retrieve {property_name} for {material_id}. Errors: {'; '.join(error_messages)}"
+    raise ValueError(error_message) 
