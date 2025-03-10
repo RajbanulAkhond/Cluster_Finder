@@ -173,18 +173,58 @@ def rank_clusters(data_source, api_key=None):
     else:
         raise TypeError("data_source must be either a file path (str) or a pandas DataFrame")
 
-    # Filter out rows where symmetry was not determined or cluster size > 6
-    df_filtered = df[
-        (df["space_group"] != "Symmetry Not Determined") &
-        (df["cluster_sizes"].apply(lambda x: all(int(size) <= 6 for size in ast.literal_eval(x))))
-    ].copy()
+    # Make a copy of the original DataFrame to avoid modifying it directly
+    df_filtered = df.copy()
+    
+    # Check if necessary columns exist, if not add them with default values
+    if "space_group" not in df_filtered.columns:
+        print("Warning: 'space_group' column not found. Using default value.")
+        df_filtered["space_group"] = "P1"  # Default to lowest symmetry
+    
+    if "point_group" not in df_filtered.columns and "point_groups" in df_filtered.columns:
+        # Try to extract point group from 'point_groups' column if available
+        print("Converting 'point_groups' to 'point_group' column...")
+        try:
+            df_filtered["point_group"] = df_filtered["point_groups"].apply(
+                lambda x: list(ast.literal_eval(x).values())[0] if isinstance(x, str) else "C1"
+            )
+        except (ValueError, SyntaxError, KeyError):
+            print("Warning: Could not parse 'point_groups' column. Using default value.")
+            df_filtered["point_group"] = "C1"  # Default to lowest symmetry
+    elif "point_group" not in df_filtered.columns:
+        print("Warning: 'point_group' column not found. Using default value.")
+        df_filtered["point_group"] = "C1"  # Default to lowest symmetry
+    
+    # Ensure we have the necessary columns for filtering
+    if "cluster_sizes" in df_filtered.columns:
+        # Filter out rows where symmetry was not determined or cluster size > 6
+        if "space_group" in df_filtered.columns:
+            df_filtered = df_filtered[
+                (df_filtered["space_group"] != "Symmetry Not Determined") &
+                (df_filtered["cluster_sizes"].apply(
+                    lambda x: all(int(size) <= 6 for size in ast.literal_eval(x) if isinstance(x, str))
+                ))
+            ]
+        else:
+            df_filtered = df_filtered[
+                df_filtered["cluster_sizes"].apply(
+                    lambda x: all(int(size) <= 6 for size in ast.literal_eval(x) if isinstance(x, str))
+                )
+            ]
 
-    # 'average_distance' column is stored as a list in string form; convert it.
-    df_filtered["average_distance"] = df_filtered["average_distance"].apply(ast.literal_eval)
-    # Create a new column for the minimum average distance.
-    df_filtered["min_avg_distance"] = df_filtered["average_distance"].apply(
-        lambda x: min(x) if isinstance(x, list) and len(x) > 0 else None
-    )
+    # Process average_distance column
+    if "average_distance" in df_filtered.columns:
+        # 'average_distance' column is stored as a list in string form; convert it.
+        df_filtered["average_distance"] = df_filtered["average_distance"].apply(
+            lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+        )
+        # Create a new column for the minimum average distance.
+        df_filtered["min_avg_distance"] = df_filtered["average_distance"].apply(
+            lambda x: min(x) if isinstance(x, list) and len(x) > 0 else None
+        )
+    else:
+        print("Warning: 'average_distance' column not found. Skipping distance-based ranking.")
+        df_filtered["min_avg_distance"] = 0  # Default to 0 for ranking
 
     # Calculate point group order
     df_filtered["point_group_order"] = df_filtered["point_group"].apply(get_point_group_order)
@@ -192,11 +232,18 @@ def rank_clusters(data_source, api_key=None):
     # Calculate space group order
     df_filtered["space_group_order"] = df_filtered["space_group"].apply(get_space_group_order)
     
+    # Determine material_id column
+    material_id_col = None
+    for col in ["material_id", "compound_id", "id"]:
+        if col in df_filtered.columns:
+            material_id_col = col
+            break
+    
     # Add energy above hull from Materials Project
-    if "material_id" in df_filtered.columns:
-        print("Retrieving energy above hull data from Materials Project...")
+    if material_id_col:
+        print(f"Retrieving energy above hull data from Materials Project using column '{material_id_col}'...")
         # Create a new column with energy above hull values
-        df_filtered["energy_above_hull"] = df_filtered["material_id"].apply(
+        df_filtered["energy_above_hull"] = df_filtered[material_id_col].apply(
             lambda mp_id: get_mp_property(mp_id, "energy_above_hull", api_key)
         )
         
@@ -208,6 +255,7 @@ def rank_clusters(data_source, api_key=None):
             - df_filtered["energy_above_hull"].fillna(1.0) * 2  # Lower energy above hull is better (more stable)
         )
     else:
+        print("Warning: No material_id column found. Skipping energy above hull data.")
         # Calculate rank score without energy above hull (higher is better)
         df_filtered["rank_score"] = (
             -df_filtered["min_avg_distance"]  # Lower distance is better (negative to invert)
