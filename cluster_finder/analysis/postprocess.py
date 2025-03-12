@@ -19,7 +19,16 @@ point_group_order_mapping = {
     "4": 4, "-4": 4, "4/m": 8, "422": 8, "4mm": 8, "-42m": 8, "4/mmm": 16,
     "3": 3, "-3": 6, "32": 6, "3m": 6, "-3m": 12,
     "6": 6, "-6": 6, "6/m": 12, "622": 12, "6mm": 12, "-62m": 12, "6/mmm": 24,
-    "23": 12, "m-3": 24, "432": 24, "-43m": 24, "m-3m": 48
+    "23": 12, "m-3": 24, "432": 24, "-43m": 24, "m-3m": 48,
+    # Add common Schoenflies notation
+    "C1": 1, "Ci": 2, "C2": 2, "Cs": 2, "C2h": 4,
+    "D2": 4, "C2v": 4, "D2h": 8,
+    "C4": 4, "S4": 4, "C4h": 8, "D4": 8, "C4v": 8, "D2d": 8, "D4h": 16,
+    "C3": 3, "C3i": 6, "D3": 6, "C3v": 6, "D3d": 12,
+    "C6": 6, "C3h": 6, "C6h": 12, "D6": 12, "C6v": 12, "D3h": 12, "D6h": 24,
+    "T": 12, "Th": 24, "O": 24, "Td": 24, "Oh": 48,
+    # Add special symbols from the dataset
+    "C*v": 4, "D*h": 24, "C2v": 4
 }
 
 # A comprehensive mapping for space group numbers
@@ -75,6 +84,26 @@ def get_point_group_order(point_group_symbol):
         int: Order of the point group
     """
     return point_group_order_mapping.get(point_group_symbol, 0)
+
+
+def get_highest_point_group_order(point_groups_dict):
+    """
+    Get the order of the highest point group from a dictionary of point groups.
+    
+    Parameters:
+        point_groups_dict (dict): Dictionary of point groups (cluster_id -> point_group)
+        
+    Returns:
+        int: Highest order of the point groups
+    """
+    if not point_groups_dict:
+        return 0
+        
+    # Get the order for each point group
+    orders = [get_point_group_order(pg) for pg in point_groups_dict.values()]
+    
+    # Return the highest order
+    return max(orders) if orders else 0
 
 
 def get_space_group_order(space_group_symbol):
@@ -154,17 +183,25 @@ def classify_dimensionality(supercell):
     return cluster_type, s_normalized.tolist()
 
 
-def rank_clusters(data_source, api_key=None):
+def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=None, include_default_ranking=True):
     """
-    Rank clusters based on dimensionality, point group order, space group order.
+    Rank clusters based on dimensionality, point group order, space group order, energy above hull,
+    and optionally additional custom materials properties with specified weights.
     
     Parameters:
         data_source (str or pandas.DataFrame): Path to a CSV file or a pandas DataFrame
         api_key (str, optional): Materials Project API key. If None, will use the API key
-                               set in the MAPI_KEY environment variable.
+                                 set in the MAPI_KEY environment variable.
+        custom_props (list, optional): List of material property names to include in ranking
+                                       (e.g. ['band_gap', 'density'])
+        prop_weights (dict, optional): Dictionary of weights for each property
+                                       (e.g. {'band_gap': 2.0, 'density': -1.0})
+                                       Positive weights favor higher values, negative weights favor lower values
+        include_default_ranking (bool, optional): Whether to include the default ranking criteria
+                                                 (min_avg_distance, point_group_order, space_group_order, energy_above_hull)
         
     Returns:
-        pandas.DataFrame: Sorted DataFrame with additional ranking columns and energy above hull
+        pandas.DataFrame: Sorted DataFrame with additional ranking columns and custom properties
     """
     if isinstance(data_source, str):
         df = pd.read_csv(data_source)
@@ -181,19 +218,39 @@ def rank_clusters(data_source, api_key=None):
         print("Warning: 'space_group' column not found. Using default value.")
         df_filtered["space_group"] = "P1"  # Default to lowest symmetry
     
-    if "point_group" not in df_filtered.columns and "point_groups" in df_filtered.columns:
-        # Try to extract point group from 'point_groups' column if available
-        print("Converting 'point_groups' to 'point_group' column...")
+    # Process point_groups column - extract the highest order point group
+    if "point_groups" in df_filtered.columns:
+        print("Using 'point_groups' column to find highest-order point group for each cluster...")
         try:
-            df_filtered["point_group"] = df_filtered["point_groups"].apply(
-                lambda x: list(ast.literal_eval(x).values())[0] if isinstance(x, str) else "C1"
+            # Extract point group dictionary from each row
+            df_filtered["point_groups_dict"] = df_filtered["point_groups"].apply(
+                lambda x: ast.literal_eval(x) if isinstance(x, str) else {}
             )
-        except (ValueError, SyntaxError, KeyError):
-            print("Warning: Could not parse 'point_groups' column. Using default value.")
-            df_filtered["point_group"] = "C1"  # Default to lowest symmetry
-    elif "point_group" not in df_filtered.columns:
-        print("Warning: 'point_group' column not found. Using default value.")
-        df_filtered["point_group"] = "C1"  # Default to lowest symmetry
+            
+            # Find the highest-order point group for each row
+            df_filtered["max_point_group_order"] = df_filtered["point_groups_dict"].apply(get_highest_point_group_order)
+            
+            # For reference, also extract the point group with highest order
+            def get_highest_order_point_group(pg_dict):
+                if not pg_dict:
+                    return "C1"
+                orders = {pg: get_point_group_order(pg) for pg in pg_dict.values()}
+                return max(orders.items(), key=lambda x: x[1])[0] if orders else "C1"
+                
+            df_filtered["highest_point_group"] = df_filtered["point_groups_dict"].apply(get_highest_order_point_group)
+            
+        except (ValueError, SyntaxError, AttributeError) as e:
+            print(f"Warning: Could not parse 'point_groups' column. Using default value. Error: {e}")
+            df_filtered["max_point_group_order"] = 1  # Default to lowest order
+            df_filtered["highest_point_group"] = "C1"
+    elif "point_group" in df_filtered.columns:
+        print("Using 'point_group' column for ranking...")
+        df_filtered["highest_point_group"] = df_filtered["point_group"]
+        df_filtered["max_point_group_order"] = df_filtered["point_group"].apply(get_point_group_order)
+    else:
+        print("Warning: Neither 'point_groups' nor 'point_group' column found. Using default value.")
+        df_filtered["highest_point_group"] = "C1"
+        df_filtered["max_point_group_order"] = 1  # Default to lowest order
     
     # Ensure we have the necessary columns for filtering
     if "cluster_sizes" in df_filtered.columns:
@@ -226,21 +283,18 @@ def rank_clusters(data_source, api_key=None):
         print("Warning: 'average_distance' column not found. Skipping distance-based ranking.")
         df_filtered["min_avg_distance"] = 0  # Default to 0 for ranking
 
-    # Calculate point group order
-    df_filtered["point_group_order"] = df_filtered["point_group"].apply(get_point_group_order)
-
     # Calculate space group order
     df_filtered["space_group_order"] = df_filtered["space_group"].apply(get_space_group_order)
     
+    # Determine material_id column - do this early so it's available for all API calls
+    material_id_col = None
+    for col in ["material_id", "compound_id", "id"]:
+        if col in df_filtered.columns:
+            material_id_col = col
+            break
+    
     # Check if energy_above_hull is already present in the dataset
     if "energy_above_hull" not in df_filtered.columns:
-        # Determine material_id column
-        material_id_col = None
-        for col in ["material_id", "compound_id", "id"]:
-            if col in df_filtered.columns:
-                material_id_col = col
-                break
-        
         # Add energy above hull from Materials Project
         if material_id_col:
             print(f"Retrieving energy above hull data from Materials Project using column '{material_id_col}'...")
@@ -259,24 +313,86 @@ def rank_clusters(data_source, api_key=None):
     else:
         print("Using existing energy_above_hull values from the input dataset")
         
-    # Calculate rank score (higher is better)
-    if "energy_above_hull" in df_filtered.columns:
-        # Calculate rank score with energy above hull (higher is better)
-        df_filtered["rank_score"] = (
-            -df_filtered["min_avg_distance"]  # Lower distance is better (negative to invert)
-            + df_filtered["point_group_order"] / 48  # Normalize by max point group order
-            + df_filtered["space_group_order"] / 230  # Normalize by max space group number
-            - df_filtered["energy_above_hull"].fillna(1.0) * 2  # Lower energy above hull is better (more stable)
-        )
-    else:
-        # Calculate rank score without energy above hull (higher is better)
-        df_filtered["rank_score"] = (
-            -df_filtered["min_avg_distance"]  # Lower distance is better (negative to invert)
-            + df_filtered["point_group_order"] / 48  # Normalize by max point group order
-            + df_filtered["space_group_order"] / 230  # Normalize by max space group number
-        )
-
-    # Sort by rank score in descending order
+    # Add custom properties if provided
+    if custom_props and material_id_col:
+        for prop in custom_props:
+            if prop in df_filtered.columns:
+                print(f"Using existing '{prop}' values from the input dataset")
+            else:
+                print(f"Retrieving {prop} data from Materials Project...")
+                try:
+                    df_filtered[prop] = df_filtered[material_id_col].apply(
+                        lambda mp_id: get_mp_property(mp_id, prop, api_key)
+                    )
+                except ValueError as e:
+                    print(f"Error retrieving {prop}: {str(e)}")
+                    print(f"Skipping {prop} in ranking calculation")
+                    if prop in custom_props:
+                        custom_props.remove(prop)
+    elif custom_props and not material_id_col:
+        print("Warning: Cannot retrieve custom properties without a material_id column.")
+    
+    # Initialize rank score
+    df_filtered["rank_score"] = 0.0
+    
+    # Default weights for standard properties
+    default_weights = {
+        "min_avg_distance": -1.0,  # Lower distance is better
+        "max_point_group_order": 1.0 / 48,  # Normalize by max point group order
+        "space_group_order": 1.0 / 230,  # Normalize by max space group number
+        "energy_above_hull": -2.0,  # Lower energy above hull is better (more stable)
+    }
+    
+    # Add custom property weights if not provided
+    if custom_props and prop_weights is None:
+        prop_weights = {}
+        for prop in custom_props:
+            prop_weights[prop] = 1.0  # Default weight for custom properties
+    
+    # Get normalization factors for custom properties to bring them to comparable scales
+    norm_factors = {}
+    if custom_props:
+        for prop in custom_props:
+            if prop in df_filtered.columns:
+                prop_values = df_filtered[prop].dropna()
+                if not prop_values.empty:
+                    value_range = prop_values.max() - prop_values.min()
+                    if value_range > 0:
+                        norm_factors[prop] = 1.0 / value_range
+                    else:
+                        norm_factors[prop] = 1.0
+                else:
+                    norm_factors[prop] = 1.0
+    
+    # Calculate rank score with default criteria
+    if include_default_ranking:
+        for prop, weight in default_weights.items():
+            if prop in df_filtered.columns:
+                # Fill NaN values with a safe default
+                if prop == "energy_above_hull":
+                    df_filtered[prop] = df_filtered[prop].fillna(1.0)
+                elif prop == "min_avg_distance":
+                    # Higher distances might be unfavorable
+                    df_filtered[prop] = df_filtered[prop].fillna(df_filtered[prop].mean())
+                else:
+                    df_filtered[prop] = df_filtered[prop].fillna(0)
+                
+                df_filtered["rank_score"] += weight * df_filtered[prop]
+    
+    # Add custom property contributions to rank score
+    if custom_props and prop_weights:
+        for prop in custom_props:
+            if prop in df_filtered.columns:
+                weight = prop_weights.get(prop, 1.0)
+                norm_factor = norm_factors.get(prop, 1.0)
+                
+                # Fill NaN values with mean to avoid skewing the ranking
+                df_filtered[prop] = df_filtered[prop].fillna(df_filtered[prop].mean())
+                
+                # Add normalized contribution to rank score
+                df_filtered["rank_score"] += weight * norm_factor * df_filtered[prop]
+    
+    # Sort by rank score in descending order (higher is better)
     df_sorted = df_filtered.sort_values("rank_score", ascending=False)
 
     return df_sorted

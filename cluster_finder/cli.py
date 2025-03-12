@@ -94,6 +94,9 @@ def get_parser():
     rank_parser.add_argument('--api-key', help='Materials Project API key (optional, will use environment variable if not provided)')
     rank_parser.add_argument('--top', type=int, default=None, help='Show only top N ranked clusters')
     rank_parser.add_argument('--format', choices=['csv', 'json', 'both'], default='csv', help='Output format (default: csv)')
+    rank_parser.add_argument('--custom-props', nargs='+', help='Custom properties to include in ranking (e.g., formation_energy_per_atom density)')
+    rank_parser.add_argument('--prop-weights', nargs='+', help='Weights for custom properties (format: prop_name:weight, e.g., formation_energy_per_atom:-1.0)')
+    rank_parser.add_argument('--no-default-ranking', action='store_true', help='Disable default ranking criteria')
     
     return parser
 
@@ -445,10 +448,29 @@ def rank_command(args):
         validate_input_file(args.input_file, '.csv')
         
         print(f"\nRanking clusters from {args.input_file}...")
-        print("This may take some time if retrieving energy_above_hull data from the Materials Project API.")
         
-        # Rank the clusters
-        ranked_df = rank_clusters(args.input_file, api_key=args.api_key)
+        # Parse custom property weights if provided
+        prop_weights = None
+        if args.prop_weights:
+            prop_weights = {}
+            for weight_str in args.prop_weights:
+                if ':' in weight_str:
+                    prop_name, weight = weight_str.split(':')
+                    try:
+                        prop_weights[prop_name] = float(weight)
+                    except ValueError:
+                        print(f"Warning: Invalid weight format for {prop_name}: {weight}. Using default weight.")
+        
+        print("This may take some time if retrieving data from the Materials Project API.")
+        
+        # Rank the clusters with the enhanced capabilities
+        ranked_df = rank_clusters(
+            data_source=args.input_file,
+            api_key=args.api_key,
+            custom_props=args.custom_props,
+            prop_weights=prop_weights,
+            include_default_ranking=not args.no_default_ranking
+        )
         
         # Limit to top N if specified
         if args.top and args.top > 0:
@@ -482,14 +504,33 @@ def rank_command(args):
         
         # Display summary of ranking
         print(f"\nRanked {len(ranked_df)} clusters based on:")
-        print("- Geometric properties (minimum average distance)")
-        print("- Symmetry (point group and space group order)")
-        if "energy_above_hull" in ranked_df.columns:
+        if not args.no_default_ranking:
+            print("- Geometric properties (minimum average distance)")
+            print("- Symmetry (point group and space group order)")
             print("- Stability (energy above hull)")
-            # Show top 3 most stable compounds
-            print("\nTop ranked clusters:")
-            with pd.option_context('display.max_rows', 5, 'display.max_columns', None):
-                print(ranked_df[['material_id', 'formula', 'energy_above_hull', 'rank_score']].head(5))
+        
+        # Show custom properties if any
+        if args.custom_props:
+            print("- Custom properties:", ", ".join(args.custom_props))
+        
+        # Show top 5 ranked clusters
+        print("\nTop ranked clusters:")
+        display_columns = ['material_id', 'formula', 'rank_score']
+        if 'energy_above_hull' in ranked_df.columns:
+            display_columns.append('energy_above_hull')
+        if 'highest_point_group' in ranked_df.columns:
+            display_columns.append('highest_point_group')
+        if 'max_point_group_order' in ranked_df.columns:
+            display_columns.append('max_point_group_order')
+        
+        # Add custom properties to display columns
+        if args.custom_props:
+            for prop in args.custom_props:
+                if prop in ranked_df.columns:
+                    display_columns.append(prop)
+        
+        with pd.option_context('display.max_rows', 5, 'display.max_columns', None):
+            print(ranked_df[display_columns].head(5))
         
     except Exception as e:
         print(f"Error in rank command: {str(e)}", file=sys.stderr)

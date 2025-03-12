@@ -8,6 +8,7 @@ Cluster Finder is a Python package for finding, analyzing, and visualizing atomi
 - Analyze cluster properties (size, average distances, etc.)
 - Visualize clusters and their connectivity
 - Export results to various formats (CIF, CSV, JSON)
+- Advanced cluster ranking with customizable property weights 
 - Command-line interface for easy usage
 - Extensible API for integration into other projects
 - Comprehensive test suite 
@@ -74,6 +75,12 @@ Visualize clusters:
 cluster-finder visualize structure_clusters.json --show
 ```
 
+Rank clusters with custom properties:
+
+```bash
+cluster-finder analyze --rank results.csv --custom-props band_gap formation_energy_per_atom --weights "band_gap:2.0,formation_energy_per_atom:-1.5"
+```
+
 ### Python API Usage
 
 ```python
@@ -103,6 +110,25 @@ print(summary)
 import matplotlib.pyplot as plt
 fig = cf.visualize_clusters_in_compound(structure, analyzed_clusters)
 plt.show()
+
+# Advanced: Rank clusters with custom properties
+import pandas as pd
+df = pd.read_csv("cluster_results.csv")
+
+# Rank using default properties (min_avg_distance, point_group_order, etc.)
+ranked_df = cf.rank_clusters(df)
+
+# Rank with custom properties and weights
+custom_props = ["band_gap", "formation_energy"]
+weights = {"band_gap": 2.0, "formation_energy": -1.5}  # Positive favors higher values, negative favors lower values
+ranked_df = cf.rank_clusters(
+    df,
+    custom_props=custom_props,
+    prop_weights=weights
+)
+
+# Save ranked results
+ranked_df.to_csv("ranked_results.csv")
 ```
 
 ## Documentation
@@ -116,8 +142,48 @@ For more detailed usage examples and API documentation, see the [example scripts
   - `utils.py`: Statistical analysis and data processing
 - `visualization`: Functions for visualizing clusters and structures
 - `analysis`: Advanced analysis of clusters and their properties
+  - `postprocess.py`: Cluster ranking and classification
+  - `dataframe.py`: Cluster data processing utilities
 - `io`: Input/output utilities for various file formats
 - `utils`: Helper functions and utilities
+
+## Advanced Usage
+
+### Cluster Ranking
+
+The package includes a powerful ranking system for evaluating clusters based on various properties:
+
+```python
+from cluster_finder.analysis.postprocess import rank_clusters
+
+# Rank by default properties (min_avg_distance, symmetry, stability)
+ranked_df = rank_clusters("clusters_data.csv")
+
+# Rank with custom properties and weights
+ranked_df = rank_clusters(
+    "clusters_data.csv",
+    api_key="your_materials_project_api_key",  # Optional for retrieving properties
+    custom_props=["band_gap", "formation_energy_per_atom"],
+    prop_weights={
+        "min_avg_distance": -2.0,              # Lower distances are better
+        "energy_above_hull": -3.0,             # Lower energy is better
+        "band_gap": 1.5,                       # Higher band gap is better
+        "formation_energy_per_atom": -1.0      # Lower formation energy is better
+    },
+    include_default_ranking=True  # Whether to include default ranking criteria
+)
+```
+
+Properties considered in ranking:
+- **Default properties**:
+  - `min_avg_distance`: Minimum average distance between atoms in cluster
+  - `max_point_group_order`: Symmetry (higher order is better)
+  - `space_group_order`: Space group order
+  - `energy_above_hull`: Thermodynamic stability (lower is better)
+  
+- **Custom properties**:
+  - Any material property available in the DataFrame or retrievable from the Materials Project
+  - Set weights based on your research priorities (+ve weights favor higher values, -ve weights favor lower values)
 
 ## Development
 
@@ -156,13 +222,17 @@ pylint cluster_finder
 
 ## Recent Updates
 
+- Enhanced cluster ranking with support for custom properties and weights
+- Improved materials property retrieval from the Materials Project API
+- Added normalization of properties for balanced ranking
+- Expanded test coverage for ranking functionalities
 - Improved package structure and organization
 - Enhanced documentation with comprehensive docstrings
 - Fixed JSON serialization of PeriodicSite objects
 - Updated cluster summary statistics with detailed output
 - Added test structure for examples
 - Fixed entry points in setup.py
-- All 47 tests passing successfully
+- All tests passing successfully
 
 ## References
 
