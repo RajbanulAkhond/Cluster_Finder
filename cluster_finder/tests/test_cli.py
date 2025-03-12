@@ -171,16 +171,25 @@ class TestCLI:
                 # Restore original directory
                 os.chdir(original_dir)
     
+    @patch('cluster_finder.cli.generate_lattice_with_clusters')
     @patch('cluster_finder.cli.Structure')
-    @patch('cluster_finder.cli.SpacegroupAnalyzer')
     @patch('cluster_finder.cli.cluster_compounds_dataframe')
     @patch('cluster_finder.cli.export_csv_data')
-    def test_analyze_command(self, mock_export, mock_df, mock_spacegroup, mock_structure):
+    def test_analyze_command(self, mock_export, mock_df, mock_structure, mock_generate_lattice):
         """Test analyze command with mocked dependencies."""
         # Set up mocks
-        mock_structure.from_dict.return_value = MagicMock()
-        mock_spacegroup.return_value.get_space_group_symbol.return_value = "P1"
-        mock_spacegroup.return_value.get_point_group_symbol.return_value = "1"
+        mock_structure_instance = MagicMock()
+        mock_structure.from_dict.return_value = mock_structure_instance
+        mock_structure_instance.lattice.as_dict.return_value = {"mock": "lattice"}
+        
+        # Mock the generate_lattice_with_clusters function
+        mock_conv_structure = MagicMock()
+        mock_conv_structure.as_dict.return_value = {"mock": "conventional_structure"}
+        mock_generate_lattice.return_value = (
+            mock_conv_structure, 
+            "P1", 
+            {"X1": "1"}
+        )
         
         mock_df.return_value = MagicMock()
         
@@ -192,13 +201,46 @@ class TestCLI:
         
         # Create a temporary directory and test JSON file
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a test JSON file
+            # Create a test JSON file with proper site data
             json_path = os.path.join(tmpdir, "test_clusters.json")
             data = {
                 "formula": "Fe8",
                 "num_clusters": 1,
-                "clusters": [{"sites": [], "size": 2}],
-                "structure": {"mock": "structure"}
+                "clusters": [{
+                    "sites": [
+                        {
+                            "species": [{"element": "Fe", "occu": 1.0}],
+                            "xyz": [1.0, 1.0, 1.0],
+                            "properties": {}
+                        },
+                        {
+                            "species": [{"element": "Fe", "occu": 1.0}],
+                            "xyz": [2.0, 2.0, 2.0],
+                            "properties": {}
+                        }
+                    ],
+                    "size": 2,
+                    "average_distance": 2.5,
+                    "centroid": [1.5, 1.5, 1.5],
+                    "elements": ["Fe", "Fe"]
+                }],
+                "structure": {
+                    "lattice": {
+                        "a": 5.0,
+                        "b": 5.0,
+                        "c": 5.0,
+                        "alpha": 90.0,
+                        "beta": 90.0,
+                        "gamma": 90.0
+                    },
+                    "sites": [
+                        {
+                            "species": [{"element": "Fe", "occu": 1.0}],
+                            "xyz": [0.0, 0.0, 0.0],
+                            "properties": {}
+                        }
+                    ]
+                }
             }
             
             with open(json_path, 'w') as f:
@@ -211,8 +253,9 @@ class TestCLI:
             analyze_command(args)
             
             # Check that the mock functions were called
-            mock_structure.from_dict.assert_called_once()
-            mock_spacegroup.assert_called_once()
+            # Structure.from_dict is called multiple times, so just verify it's called at least once
+            mock_structure.from_dict.assert_called()
+            mock_generate_lattice.assert_called_once()
             mock_df.assert_called_once()
             mock_export.assert_called_once()
     
@@ -238,7 +281,13 @@ class TestCLI:
             # Create a test JSON file
             json_path = os.path.join(tmpdir, "test_clusters.json")
             data = {
-                "clusters": [{"sites": [], "size": 2}],
+                "clusters": [{
+                    "sites": [], 
+                    "size": 2,
+                    "average_distance": 2.5,
+                    "centroid": [0.0, 0.0, 0.0],
+                    "elements": ["Fe", "Fe"]
+                }],
                 "structure": {"mock": "structure"}
             }
             
@@ -368,4 +417,4 @@ class TestCLI:
         mock_find.side_effect = Exception("Test error")
         mock_args.command = 'find'
         main()
-        mock_exit.assert_called_with(1) 
+        mock_exit.assert_called_with(1)
