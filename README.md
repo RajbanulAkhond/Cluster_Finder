@@ -78,7 +78,7 @@ cluster-finder visualize structure_clusters.json --show
 Rank clusters with custom properties:
 
 ```bash
-cluster-finder analyze --rank results.csv --custom-props band_gap formation_energy_per_atom --weights "band_gap:2.0,formation_energy_per_atom:-1.5"
+cluster-finder rank results.csv --custom-props band_gap formation_energy_per_atom --weights "band_gap:2.0,formation_energy_per_atom:-1.5"
 ```
 
 ### Python API Usage
