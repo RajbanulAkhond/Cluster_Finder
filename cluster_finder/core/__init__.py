@@ -15,12 +15,14 @@ from .structure import (
 from .clusters import (
     find_clusters,
     calculate_average_distance,
-    calculate_centroid,
     build_graph,
     split_cluster,
     analyze_clusters,
     identify_unique_clusters
 )
+
+# Import from utils module
+from .utils import calculate_centroid
 
 # Import from simple_search module
 from .simple_search import (
@@ -48,5 +50,9 @@ __all__ = [
     'analyze_clusters',
     'identify_unique_clusters',
     'structure_to_graph',
-    'create_connectivity_matrix'
+    'create_connectivity_matrix',
+    'find_trimers',
+    'analyze_compound_trimers',
+    'print_trimer_results',
+    'search_and_analyze_trimers'
 ]

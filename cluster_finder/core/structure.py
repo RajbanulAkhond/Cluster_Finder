@@ -19,38 +19,8 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer, PointGroupAnalyzer
 import numpy as np
 import networkx as nx
 from .graph import structure_to_graph, create_connectivity_matrix
-
-def calculate_centroid(sites, lattice=None):
-    """
-    Calculate the centroid (geometric center) of a group of sites.
-    
-    For periodic structures (when lattice is provided), the function handles
-    periodic boundary conditions by:
-    1. Converting to fractional coordinates
-    2. Wrapping coordinates to [0, 1) range
-    3. Converting back to cartesian coordinates
-    
-    Parameters:
-        sites (list): List of pymatgen Site objects representing atomic positions
-        lattice (Lattice, optional): Lattice object for periodic boundary conditions.
-                                   If None, treats coordinates as non-periodic.
-        
-    Returns:
-        numpy.ndarray: Cartesian coordinates of the centroid
-    
-    Example:
-        >>> sites = [site1, site2, site3]  # List of pymatgen Site objects
-        >>> centroid = calculate_centroid(sites, structure.lattice)
-    """
-    coords = np.array([site.coords for site in sites])
-    if lattice is not None:
-        # Apply periodic boundary conditions if lattice is provided
-        frac_coords = lattice.get_fractional_coords(coords)
-        # Wrap to [0, 1)
-        frac_coords = frac_coords % 1.0
-        # Convert back to cartesian
-        coords = lattice.get_cartesian_coords(frac_coords)
-    return np.mean(coords, axis=0)
+from .clusters import identify_unique_clusters
+from .utils import calculate_centroid
 
 def find_non_equivalent_positions(structure, transition_metals):
     """
@@ -84,72 +54,6 @@ def find_non_equivalent_positions(structure, transition_metals):
 
     return unique_sites
 
-
-def create_connectivity_matrix(structure, transition_metals, cutoff=3.5):
-    """
-    Create a connectivity matrix for transition metal atoms in a structure.
-    
-    The connectivity matrix is a symmetric binary matrix where entry (i,j) is 1
-    if atoms i and j are within the cutoff distance of each other, and 0 otherwise.
-    Only transition metal atoms specified in the transition_metals list are considered.
-    
-    Parameters:
-        structure (Structure): A pymatgen Structure object
-        transition_metals (list): List of transition metal element symbols to consider
-        cutoff (float): Maximum distance (in Angstroms) for considering atoms as connected
-        
-    Returns:
-        tuple: (connectivity_matrix, tm_indices) where:
-            - connectivity_matrix (numpy.ndarray): Binary matrix of connections
-            - tm_indices (list): Indices of transition metal atoms in the structure
-    
-    Example:
-        >>> matrix, indices = create_connectivity_matrix(structure, ["Fe"], 3.5)
-        >>> print(f"Found {len(indices)} Fe atoms")
-    """
-    tm_indices = [i for i, site in enumerate(structure) 
-                 if hasattr(site.specie, 'symbol') and site.specie.symbol in transition_metals]
-    
-    n = len(tm_indices)
-    matrix = np.zeros((n, n), dtype=int)
-    
-    for i in range(n):
-        for j in range(i+1, n):
-            if structure[tm_indices[i]].distance(structure[tm_indices[j]]) <= cutoff:
-                matrix[i, j] = matrix[j, i] = 1
-                
-    return matrix, tm_indices
-
-
-def structure_to_graph(connectivity_matrix):
-    """
-    Convert a connectivity matrix to a networkx graph representation.
-    
-    Creates an undirected graph where vertices represent atoms and edges
-    represent connections between atoms (as defined by the connectivity matrix).
-    
-    Parameters:
-        connectivity_matrix (numpy.ndarray): Square binary matrix where 1 indicates
-                                          a connection between atoms i and j
-        
-    Returns:
-        networkx.Graph: Graph representation where:
-            - Nodes are integers representing atom indices
-            - Edges connect atoms that are within the cutoff distance
-    
-    Example:
-        >>> matrix = np.array([[0, 1], [1, 0]])  # Two connected atoms
-        >>> graph = structure_to_graph(matrix)
-        >>> print(f"Graph has {graph.number_of_nodes()} nodes")
-    """
-    G = nx.Graph()
-    for i in range(len(connectivity_matrix)):
-        for j in range(len(connectivity_matrix)):
-            if connectivity_matrix[i, j] == 1:
-                G.add_edge(i, j)
-    return G
-
-
 def generate_supercell(structure, supercell_matrix=(2, 2, 2)):
     """
     Generate a supercell from a crystal structure.
@@ -171,53 +75,6 @@ def generate_supercell(structure, supercell_matrix=(2, 2, 2)):
         >>> print(f"Supercell atoms: {len(supercell)}")
     """
     return structure.make_supercell(supercell_matrix)
-
-
-def identify_unique_clusters(clusters, tolerance=1e-5):
-    """
-    Identify unique clusters and assign them distinct labels.
-    
-    Clusters are considered unique based on:
-    1. Number of atoms (size)
-    2. Average interatomic distance
-    3. Chemical composition (element types)
-    
-    Parameters:
-        clusters (list[dict]): List of cluster dictionaries, each containing:
-            - "sites": list of pymatgen Site objects
-            - "size": number of sites in the cluster
-            - "average_distance": average distance between sites
-            - "label" (optional): existing label for the cluster
-        tolerance (float): Distance threshold for considering clusters as unique
-    
-    Returns:
-        list[dict]: List of unique clusters with assigned labels ("X0", "X1", etc.)
-    
-    Example:
-        >>> unique = identify_unique_clusters(clusters)
-        >>> print(f"Found {len(unique)} unique cluster types")
-    """
-    unique_clusters = []
-    seen_clusters = set()
-
-    for i, cluster in enumerate(clusters):
-        # Create a unique identifier for the cluster based on its properties
-        cluster_key = (
-            cluster["size"],
-            round(cluster["average_distance"], 3),
-            tuple(sorted(site.specie.symbol for site in cluster["sites"]))
-        )
-
-        if cluster_key not in seen_clusters:
-            seen_clusters.add(cluster_key)
-            # Add a label to the cluster
-            cluster_with_label = cluster.copy()
-            if "label" not in cluster_with_label:
-                cluster_with_label["label"] = f"X{len(unique_clusters)}"
-            unique_clusters.append(cluster_with_label)
-
-    return unique_clusters
-
 
 def generate_lattice_with_clusters(structure, clusters, tolerance=1e-5):
     """
@@ -255,8 +112,9 @@ def generate_lattice_with_clusters(structure, clusters, tolerance=1e-5):
     # Extract the lattice from the original structure
     lattice = structure.lattice
 
-    # Identify clusters and assign unique labels
-    unique_clusters = identify_unique_clusters(clusters)
+    # Identify clusters and assign unique labels using the imported function
+    # Note: We use use_symmetry=False here since we do our own symmetry analysis
+    unique_clusters = identify_unique_clusters(clusters, use_symmetry=False, tolerance=tolerance)
 
     cluster_sites = []    # To store unique fractional coordinates
     species_labels = []   # To store DummySpecies labels

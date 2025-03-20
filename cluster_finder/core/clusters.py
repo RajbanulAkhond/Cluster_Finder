@@ -10,6 +10,7 @@ from pymatgen.core.structure import Structure, Molecule
 from pymatgen.core.lattice import Lattice
 from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 from .graph import structure_to_graph, create_connectivity_matrix
+from .utils import calculate_centroid
 
 # Default constants
 DEFAULT_MAX_RADIUS = 3.5  # Maximum atom-to-atom distance for cluster search
@@ -60,22 +61,6 @@ def calculate_average_distance(sites, max_radius=3.5):
                 distances.append(dist)
     
     return np.mean(distances) if distances else 0.0
-
-
-def calculate_centroid(cluster, lattice):
-    """
-    Calculate the centroid of a cluster in Cartesian coordinates.
-    
-    Parameters:
-        cluster (list): List of pymatgen Site objects
-        lattice (Lattice): The lattice of the structure
-        
-    Returns:
-        numpy.ndarray: Centroid coordinates
-    """
-    cart_coords = np.array([site.coords for site in cluster])
-    centroid = np.mean(cart_coords, axis=0)
-    return centroid
 
 
 def build_graph(sites, cutoff=3.5, distances_cache=None):
@@ -211,44 +196,64 @@ def analyze_clusters(clusters, lattice, cluster_size=DEFAULT_CLUSTER_SIZE+1, max
     return processed_clusters
 
 
-def identify_unique_clusters(clusters):
+def identify_unique_clusters(clusters, use_symmetry=True, tolerance=1e-5):
     """
-    Identify unique clusters based on atoms, connectivity, and point group symmetry.
+    Identify unique clusters based on atoms, connectivity, and optionally point group symmetry.
     
     Parameters:
         clusters (list): List of cluster dictionaries
+        use_symmetry (bool): Whether to include point group symmetry in uniqueness criteria
+        tolerance (float): Distance threshold for considering clusters as unique
         
     Returns:
-        list: List of unique clusters with metadata
+        list: List of unique clusters with metadata and labels
     """
     unique_clusters = []
     seen_cluster_keys = set()
     
-    for cluster in clusters:
-        # Generate a key for each cluster based on atom types and connectivity
+    for i, cluster in enumerate(clusters):
+        # Always consider basic properties (size, distance, elements)
         atom_types = sorted([site.specie.symbol for site in cluster["sites"]])
+        basic_key = (
+            cluster["size"],
+            round(cluster["average_distance"], 3),
+            tuple(atom_types)
+        )
         
-        # Create a simplified connectivity representation
-        conn_graph = build_graph(cluster["sites"], cluster["average_distance"] * 1.1)
-        edge_count = len(conn_graph.edges())
-        
-        # Calculate point group symmetry
-        species = [site.specie for site in cluster["sites"]]
-        cartesian_coords = [site.coords for site in cluster["sites"]]
-        molecule = Molecule(species, cartesian_coords)
-        pga = PointGroupAnalyzer(molecule)
-        point_group = pga.get_pointgroup()
-        point_group_symbol = point_group.sch_symbol
-        
-        # Add point group symbol to cluster data
-        cluster["point_group"] = point_group_symbol
-        
-        # Create a cluster key including point group symmetry
-        cluster_key = (tuple(atom_types), edge_count, point_group_symbol)
+        # Optionally add point group symmetry for more precise classification
+        if use_symmetry:
+            # Calculate point group symmetry if not already present
+            if "point_group" not in cluster:
+                # Create a molecule object for symmetry analysis
+                species = [site.specie for site in cluster["sites"]]
+                cartesian_coords = [site.coords for site in cluster["sites"]]
+                molecule = Molecule(species, cartesian_coords)
+                pga = PointGroupAnalyzer(molecule)
+                point_group = pga.get_pointgroup()
+                point_group_symbol = point_group.sch_symbol
+                cluster["point_group"] = point_group_symbol
+            else:
+                point_group_symbol = cluster["point_group"]
+                
+            # Create a graph to analyze connectivity
+            conn_graph = build_graph(cluster["sites"], cluster["average_distance"] * 1.1)
+            edge_count = len(conn_graph.edges())
+            
+            # Extended key including symmetry and connectivity
+            cluster_key = (basic_key, edge_count, point_group_symbol)
+        else:
+            # Use only basic properties for the key
+            cluster_key = basic_key
         
         if cluster_key not in seen_cluster_keys:
             seen_cluster_keys.add(cluster_key)
-            unique_clusters.append(cluster)
+            
+            # Add a label to the cluster if not already present
+            cluster_with_label = cluster.copy()
+            if "label" not in cluster_with_label:
+                cluster_with_label["label"] = f"X{len(unique_clusters)}"
+                
+            unique_clusters.append(cluster_with_label)
     
     return unique_clusters
 

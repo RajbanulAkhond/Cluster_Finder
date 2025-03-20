@@ -6,6 +6,7 @@ particularly focusing on:
 - Statistical analysis of clusters
 - Data summarization and reporting
 - Error handling and input validation
+- Geometric calculations
 
 The functions in this module are designed to work with the data structures
 used in the cluster_finder package, particularly the compound and cluster
@@ -13,6 +14,38 @@ dictionaries produced by the analysis functions.
 """
 
 import numpy as np
+
+def calculate_centroid(sites, lattice=None):
+    """
+    Calculate the centroid (geometric center) of a group of sites.
+    
+    For periodic structures (when lattice is provided), the function handles
+    periodic boundary conditions by:
+    1. Converting to fractional coordinates
+    2. Wrapping coordinates to [0, 1) range
+    3. Converting back to cartesian coordinates
+    
+    Parameters:
+        sites (list): List of pymatgen Site objects representing atomic positions
+        lattice (Lattice, optional): Lattice object for periodic boundary conditions.
+                                   If None, treats coordinates as non-periodic.
+        
+    Returns:
+        numpy.ndarray: Cartesian coordinates of the centroid
+    
+    Example:
+        >>> sites = [site1, site2, site3]  # List of pymatgen Site objects
+        >>> centroid = calculate_centroid(sites, structure.lattice)
+    """
+    coords = np.array([site.coords for site in sites])
+    if lattice is not None:
+        # Apply periodic boundary conditions if lattice is provided
+        frac_coords = lattice.get_fractional_coords(coords)
+        # Wrap to [0, 1)
+        frac_coords = frac_coords % 1.0
+        # Convert back to cartesian
+        coords = lattice.get_cartesian_coords(frac_coords)
+    return np.mean(coords, axis=0)
 
 def cluster_summary_stat(compounds_with_clusters, entries):
     """
@@ -117,4 +150,4 @@ def cluster_summary_stat(compounds_with_clusters, entries):
         except KeyError as e:
             raise KeyError(f"Missing required field in compound data: {str(e)}")
     
-    return "\n".join(summary) 
+    return "\n".join(summary)
