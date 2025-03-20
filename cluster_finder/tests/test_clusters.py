@@ -4,8 +4,9 @@ Tests for cluster functionality of the cluster_finder package.
 
 import pytest
 import numpy as np
-from pymatgen.core.structure import Structure
+from pymatgen.core.structure import Structure, Molecule
 from pymatgen.core.lattice import Lattice
+from pymatgen.core.sites import Site
 from collections import namedtuple
 import networkx as nx
 
@@ -13,7 +14,8 @@ from cluster_finder.core.clusters import (
     get_compounds_with_clusters,
     find_clusters,
     analyze_clusters,
-    calculate_centroid
+    calculate_centroid,
+    identify_unique_clusters
 )
 
 # Create a mock Entry class for testing
@@ -122,4 +124,95 @@ def test_get_compounds_with_clusters_no_clusters(simple_ionic_structure):
     assert len(compounds) == 1
     
     # Check that the compound has no clusters
-    assert len(compounds[0]["clusters"]) == 0 
+    assert len(compounds[0]["clusters"]) == 0
+
+def test_identify_unique_clusters_with_point_group():
+    """Test identify_unique_clusters function with point group symmetry criterion."""
+    # Create a mock lattice
+    lattice = Lattice.cubic(5.0)
+    
+    # Create clusters with different geometries that will have different point group symmetries
+    # Tetrahedral cluster (Td point group)
+    sites1 = [
+        Site("Fe", [0, 0, 0]),
+        Site("Fe", [1, 1, 1]),
+        Site("Fe", [1, -1, -1]),
+        Site("Fe", [-1, 1, -1]),
+        Site("Fe", [-1, -1, 1])
+    ]
+    
+    # Square planar cluster (D4h point group)
+    sites2 = [
+        Site("Fe", [0, 0, 0]),
+        Site("Fe", [1, 0, 0]),
+        Site("Fe", [0, 1, 0]),
+        Site("Fe", [-1, 0, 0]),
+        Site("Fe", [0, -1, 0])
+    ]
+    
+    # Octahedral cluster (Oh point group)
+    sites3 = [
+        Site("Fe", [0, 0, 0]),
+        Site("Fe", [1, 0, 0]),
+        Site("Fe", [-1, 0, 0]),
+        Site("Fe", [0, 1, 0]),
+        Site("Fe", [0, -1, 0]),
+        Site("Fe", [0, 0, 1]),
+        Site("Fe", [0, 0, -1])
+    ]
+    
+    # Create cluster dictionaries
+    cluster1 = {
+        "sites": sites1,
+        "size": len(sites1),
+        "average_distance": 1.5,
+        "centroid": np.array([0, 0, 0])
+    }
+    
+    cluster2 = {
+        "sites": sites2,
+        "size": len(sites2),
+        "average_distance": 1.0,
+        "centroid": np.array([0, 0, 0])
+    }
+    
+    cluster3 = {
+        "sites": sites3,
+        "size": len(sites3),
+        "average_distance": 1.0,
+        "centroid": np.array([0, 0, 0])
+    }
+    
+    # Test with clusters that have different point group symmetries
+    mock_clusters = [cluster1, cluster2, cluster3]
+    unique_clusters = identify_unique_clusters(mock_clusters)
+    
+    # All three clusters should be considered unique due to their different point group symmetries
+    assert len(unique_clusters) == 3
+    
+    # Check that point group information was added to each cluster
+    for cluster in unique_clusters:
+        assert "point_group" in cluster
+    
+    # Create two identical tetrahedral clusters - these should be considered the same
+    sites4 = [
+        Site("Fe", [0, 0, 0]),
+        Site("Fe", [1, 1, 1]),
+        Site("Fe", [1, -1, -1]),
+        Site("Fe", [-1, 1, -1]),
+        Site("Fe", [-1, -1, 1])
+    ]
+    
+    cluster4 = {
+        "sites": sites4,
+        "size": len(sites4),
+        "average_distance": 1.5,
+        "centroid": np.array([0, 0, 0])
+    }
+    
+    # Test with two identical clusters
+    mock_clusters = [cluster1, cluster4]
+    unique_clusters = identify_unique_clusters(mock_clusters)
+    
+    # Should only find one unique cluster since they have identical geometries
+    assert len(unique_clusters) == 1

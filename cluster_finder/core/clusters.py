@@ -6,8 +6,9 @@ This module contains functions for finding, analyzing, and manipulating clusters
 
 import numpy as np
 import networkx as nx
-from pymatgen.core.structure import Structure
+from pymatgen.core.structure import Structure, Molecule
 from pymatgen.core.lattice import Lattice
+from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 from .graph import structure_to_graph, create_connectivity_matrix
 
 # Default constants
@@ -212,7 +213,7 @@ def analyze_clusters(clusters, lattice, cluster_size=DEFAULT_CLUSTER_SIZE+1, max
 
 def identify_unique_clusters(clusters):
     """
-    Identify unique clusters based on atoms and connectivity.
+    Identify unique clusters based on atoms, connectivity, and point group symmetry.
     
     Parameters:
         clusters (list): List of cluster dictionaries
@@ -231,7 +232,19 @@ def identify_unique_clusters(clusters):
         conn_graph = build_graph(cluster["sites"], cluster["average_distance"] * 1.1)
         edge_count = len(conn_graph.edges())
         
-        cluster_key = (tuple(atom_types), edge_count)
+        # Calculate point group symmetry
+        species = [site.specie for site in cluster["sites"]]
+        cartesian_coords = [site.coords for site in cluster["sites"]]
+        molecule = Molecule(species, cartesian_coords)
+        pga = PointGroupAnalyzer(molecule)
+        point_group = pga.get_pointgroup()
+        point_group_symbol = point_group.sch_symbol
+        
+        # Add point group symbol to cluster data
+        cluster["point_group"] = point_group_symbol
+        
+        # Create a cluster key including point group symmetry
+        cluster_key = (tuple(atom_types), edge_count, point_group_symbol)
         
         if cluster_key not in seen_cluster_keys:
             seen_cluster_keys.add(cluster_key)
@@ -281,4 +294,4 @@ def get_compounds_with_clusters(entries, transition_metals):
             "structure": structure
         })
     
-    return compounds_with_clusters, graph, structure, tm_indices 
+    return compounds_with_clusters, graph, structure, tm_indices
