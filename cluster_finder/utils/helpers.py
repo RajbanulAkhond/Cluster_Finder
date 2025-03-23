@@ -43,7 +43,7 @@ def get_transition_metals():
     ]
 
 
-def search_transition_metal_compounds(transition_metals, api_key, min_elements=2, max_elements=4, 
+def search_transition_metal_compounds(elements, api_key, min_elements=2, max_elements=4, 
                                       min_magnetization=0.001, include_fields=None):
     """
     Search for transition metal compounds meeting specific criteria.
@@ -71,7 +71,7 @@ def search_transition_metal_compounds(transition_metals, api_key, min_elements=2
     # Initialize the MPRester
     with MPRester(api_key) as mpr:
         entries = mpr.materials.summary.search(
-            elements=transition_metals,
+            elements=elements,
             num_elements=(min_elements, max_elements),
             total_magnetization=(min_magnetization, None),
             fields=fields

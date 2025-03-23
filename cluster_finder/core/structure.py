@@ -82,7 +82,7 @@ def generate_lattice_with_clusters(structure, clusters, tolerance=1e-5):
     
     This function:
     1. Identifies unique cluster types
-    2. Computes cluster centroids
+    2. Uses existing centroids or computes cluster centroids if not provided
     3. Creates a new structure with dummy atoms representing clusters
     4. Analyzes symmetry of the resulting structure
     5. Determines point group symmetry of each cluster
@@ -91,6 +91,7 @@ def generate_lattice_with_clusters(structure, clusters, tolerance=1e-5):
         structure (Structure): The original crystal structure
         clusters (list[dict]): List of cluster dictionaries, each containing:
             - "sites": list of pymatgen Site objects
+            - "centroid": (optional) pre-calculated centroid coordinates
         tolerance (float): Distance threshold for considering clusters as unique
     
     Returns:
@@ -113,16 +114,21 @@ def generate_lattice_with_clusters(structure, clusters, tolerance=1e-5):
     lattice = structure.lattice
 
     # Identify clusters and assign unique labels using the imported function
-    # Note: We use use_symmetry=False here since we do our own symmetry analysis
-    unique_clusters = identify_unique_clusters(clusters, use_symmetry=False, tolerance=tolerance)
+    
+    unique_clusters = identify_unique_clusters(clusters, tolerance=tolerance)
 
     cluster_sites = []    # To store unique fractional coordinates
     species_labels = []   # To store DummySpecies labels
     point_groups = {}     # To store point groups for each unique cluster
 
     for cluster in unique_clusters:
-        # Compute the centroid using fractional coordinates
-        centroid = calculate_centroid(cluster["sites"], lattice)
+        # Check if centroid is already provided in the cluster data
+        if "centroid" in cluster:
+            centroid = cluster["centroid"]
+        else:
+            # Compute the centroid using fractional coordinates only if not provided
+            centroid = calculate_centroid(cluster["sites"], lattice)
+            
         # Ensure fractional coordinates are within [0,1)
         fractional_coords = np.mod(lattice.get_fractional_coords(centroid), 1.0)
 
