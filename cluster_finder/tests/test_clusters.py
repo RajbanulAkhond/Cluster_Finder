@@ -58,7 +58,7 @@ def test_get_compounds_with_clusters(mock_entries):
     transition_metals = ["Fe", "Co"]
     
     # Get compounds with clusters
-    compounds, graph, structure, tm_indices = get_compounds_with_clusters(mock_entries, transition_metals)
+    compounds = get_compounds_with_clusters(mock_entries, transition_metals)
     
     # Check that we got the expected number of compounds
     assert len(compounds) == 2
@@ -70,6 +70,7 @@ def test_get_compounds_with_clusters(mock_entries):
         assert "total_magnetization" in compound
         assert "clusters" in compound
         assert "structure" in compound
+        assert "graph" in compound  # Now graph is inside the compound dict
         
         # Check that clusters have the expected structure
         for cluster in compound["clusters"]:
@@ -82,26 +83,20 @@ def test_get_compounds_with_clusters(mock_entries):
             assert isinstance(cluster["centroid"], np.ndarray)
             assert len(cluster["centroid"]) == 3
     
-    # Check that graph is a networkx Graph
-    assert isinstance(graph, nx.Graph)
+    # Check that graph is a networkx Graph (now contained in the compound dict)
+    assert isinstance(compounds[0]["graph"], nx.Graph)
     
     # Check that structure is a pymatgen Structure
-    assert isinstance(structure, Structure)
-    
-    # Check that tm_indices is a list
-    assert isinstance(tm_indices, list)
+    assert isinstance(compounds[0]["structure"], Structure)
 
 def test_get_compounds_with_clusters_empty_input():
     """Test get_compounds_with_clusters function with empty input."""
     transition_metals = ["Fe", "Co"]
     
     # Test with empty entries list
-    compounds, graph, structure, tm_indices = get_compounds_with_clusters([], transition_metals)
+    compounds = get_compounds_with_clusters([], transition_metals)
     
     assert len(compounds) == 0
-    assert graph is None
-    assert structure is None
-    assert tm_indices is None
 
 def test_get_compounds_with_clusters_no_clusters(simple_ionic_structure):
     """Test get_compounds_with_clusters function with a structure that has no clusters."""
@@ -118,7 +113,7 @@ def test_get_compounds_with_clusters_no_clusters(simple_ionic_structure):
     transition_metals = ["Fe", "Co"]  # These metals aren't in the structure
     
     # Get compounds with clusters
-    compounds, graph, structure, tm_indices = get_compounds_with_clusters(entries, transition_metals)
+    compounds = get_compounds_with_clusters(entries, transition_metals)
     
     # Check that we got one compound
     assert len(compounds) == 1

@@ -74,7 +74,9 @@ def generate_supercell(structure, supercell_matrix=(2, 2, 2)):
         >>> print(f"Original atoms: {len(structure)}")
         >>> print(f"Supercell atoms: {len(supercell)}")
     """
-    return structure.make_supercell(supercell_matrix)
+    # Create a copy of the structure to avoid modifying the original
+    structure_copy = structure.copy()
+    return structure_copy.make_supercell(supercell_matrix)
 
 def generate_lattice_with_clusters(structure, clusters, tolerance=1e-5):
     """

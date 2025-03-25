@@ -185,7 +185,7 @@ def classify_dimensionality(supercell):
 
 def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=None, include_default_ranking=True):
     """
-    Rank clusters based on dimensionality, point group order, space group order, energy above hull,
+    Rank clusters based on dimensionality, point group order, space group order,
     and optionally additional custom materials properties with specified weights.
     
     Parameters:
@@ -198,7 +198,7 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
                                        (e.g. {'band_gap': 2.0, 'density': -1.0})
                                        Positive weights favor higher values, negative weights favor lower values
         include_default_ranking (bool, optional): Whether to include the default ranking criteria
-                                                 (min_avg_distance, point_group_order, space_group_order, energy_above_hull)
+                                                 (min_avg_distance, point_group_order, space_group_order)
         
     Returns:
         pandas.DataFrame: Sorted DataFrame with additional ranking columns and custom properties
@@ -208,7 +208,7 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
     elif isinstance(data_source, pd.DataFrame):
         df = data_source.copy()  # Create a copy to avoid modifying the original
     else:
-        raise TypeError("data_source must be either a file path (str) or a pandas DataFrame")
+        raise TypeError("Data_source must be either a file path (str) or a pandas DataFrame")
 
     # Make a copy of the original DataFrame to avoid modifying it directly
     df_filtered = df.copy()
@@ -220,7 +220,6 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
     
     # Process point_groups column - extract the highest order point group
     if "point_groups" in df_filtered.columns:
-        print("Using 'point_groups' column to find highest-order point group for each cluster...")
         try:
             # Extract point group dictionary from each row
             df_filtered["point_groups_dict"] = df_filtered["point_groups"].apply(
@@ -259,13 +258,13 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
             df_filtered = df_filtered[
                 (df_filtered["space_group"] != "Symmetry Not Determined") &
                 (df_filtered["cluster_sizes"].apply(
-                    lambda x: all(int(size) <= 6 for size in ast.literal_eval(x) if isinstance(x, str))
+                    lambda x: all(int(size) <= 6 for size in (ast.literal_eval(x) if isinstance(x, str) else x))
                 ))
             ]
         else:
             df_filtered = df_filtered[
                 df_filtered["cluster_sizes"].apply(
-                    lambda x: all(int(size) <= 6 for size in ast.literal_eval(x) if isinstance(x, str))
+                    lambda x: all(int(size) <= 6 for size in (ast.literal_eval(x) if isinstance(x, str) else x))
                 )
             ]
 
@@ -292,27 +291,7 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
         if col in df_filtered.columns:
             material_id_col = col
             break
-    
-    # Check if energy_above_hull is already present in the dataset
-    if "energy_above_hull" not in df_filtered.columns:
-        # Add energy above hull from Materials Project
-        if material_id_col:
-            print(f"Retrieving energy above hull data from Materials Project using column '{material_id_col}'...")
-            try:
-                # Create a new column with energy above hull values
-                df_filtered["energy_above_hull"] = df_filtered[material_id_col].apply(
-                    lambda mp_id: get_mp_property(mp_id, "energy_above_hull", api_key)
-                )
-            except ValueError as e:
-                print(f"Error: {str(e)}")
-                print("Using a default value of 1.0 for energy_above_hull for ranking purposes")
-                df_filtered["energy_above_hull"] = 1.0
-        else:
-            print("Warning: No material_id column found. Using default value for energy above hull.")
-            df_filtered["energy_above_hull"] = 1.0  # Default to unstable
-    else:
-        print("Using existing energy_above_hull values from the input dataset")
-        
+  
     # Add custom properties if provided
     if custom_props and material_id_col:
         for prop in custom_props:
@@ -340,38 +319,53 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
         "min_avg_distance": -1.0,  # Lower distance is better
         "max_point_group_order": 1.0 / 48,  # Normalize by max point group order
         "space_group_order": 1.0 / 230,  # Normalize by max space group number
-        "energy_above_hull": -2.0,  # Lower energy above hull is better (more stable)
     }
     
     # Add custom property weights if not provided
     if custom_props and prop_weights is None:
         prop_weights = {}
         for prop in custom_props:
-            prop_weights[prop] = 1.0  # Default weight for custom properties
+            prop_weights[prop] = 0.0  # Default weight for custom properties
     
     # Get normalization factors for custom properties to bring them to comparable scales
     norm_factors = {}
+    numerical_props = []  # Track which custom properties are numerical
+    
     if custom_props:
         for prop in custom_props:
             if prop in df_filtered.columns:
-                prop_values = df_filtered[prop].dropna()
-                if not prop_values.empty:
-                    value_range = prop_values.max() - prop_values.min()
-                    if value_range > 0:
-                        norm_factors[prop] = 1.0 / value_range
+                # Check if property values are numerical
+                try:
+                    # Convert to numeric, with non-numeric values becoming NaN
+                    numeric_values = pd.to_numeric(df_filtered[prop], errors='coerce')
+                    
+                    # If we have some valid numeric values
+                    if not numeric_values.dropna().empty:
+                        # Store the numeric values back
+                        df_filtered[prop] = numeric_values
+                        
+                        # Get normalization factor
+                        prop_values = numeric_values.dropna()
+                        value_range = prop_values.max() - prop_values.min()
+                        
+                        if value_range > 0:
+                            norm_factors[prop] = 1.0 / value_range
+                        else:
+                            norm_factors[prop] = 1.0
+                        
+                        # Mark this property as numerical for ranking
+                        numerical_props.append(prop)
                     else:
-                        norm_factors[prop] = 1.0
-                else:
-                    norm_factors[prop] = 1.0
+                        print(f"Warning: Property '{prop}' contains non-numerical values and will be excluded from ranking.")
+                except (TypeError, ValueError) as e:
+                    print(f"Warning: Property '{prop}' cannot be converted to numeric values: {e}")
+                    print(f"This property will be included in the dataframe but excluded from ranking.")
     
     # Calculate rank score with default criteria
     if include_default_ranking:
         for prop, weight in default_weights.items():
             if prop in df_filtered.columns:
-                # Fill NaN values with a safe default
-                if prop == "energy_above_hull":
-                    df_filtered[prop] = df_filtered[prop].fillna(1.0)
-                elif prop == "min_avg_distance":
+                if prop == "min_avg_distance":
                     # Higher distances might be unfavorable
                     df_filtered[prop] = df_filtered[prop].fillna(df_filtered[prop].mean())
                 else:
@@ -379,15 +373,16 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
                 
                 df_filtered["rank_score"] += weight * df_filtered[prop]
     
-    # Add custom property contributions to rank score
+    # Add custom property contributions to rank score - ONLY for numerical properties
     if custom_props and prop_weights:
-        for prop in custom_props:
+        for prop in numerical_props:  # Use only numerical properties for ranking
             if prop in df_filtered.columns:
                 weight = prop_weights.get(prop, 1.0)
                 norm_factor = norm_factors.get(prop, 1.0)
                 
                 # Fill NaN values with mean to avoid skewing the ranking
-                df_filtered[prop] = df_filtered[prop].fillna(df_filtered[prop].mean())
+                mean_value = df_filtered[prop].mean()
+                df_filtered[prop] = df_filtered[prop].fillna(mean_value)
                 
                 # Add normalized contribution to rank score
                 df_filtered["rank_score"] += weight * norm_factor * df_filtered[prop]

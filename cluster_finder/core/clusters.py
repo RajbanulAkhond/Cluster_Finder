@@ -296,7 +296,8 @@ def get_compounds_with_clusters(entries, transition_metals):
             "formula": formula,
             "total_magnetization": total_magnetization,
             "clusters": analyzed_clusters,
+            "graph": graph,
             "structure": structure
         })
     
-    return compounds_with_clusters, graph, structure, tm_indices
+    return compounds_with_clusters

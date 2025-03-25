@@ -8,10 +8,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import networkx as nx
+from pymatgen.io.ase import AseAtomsAdaptor
+from pymatgen.core.periodic_table import DummySpecies
+from ase.visualize.plot import plot_atoms
+from ase.data.colors import jmol_colors
+from ase.data import chemical_symbols
+import numpy as np
 import matplotlib.colors as mcolors
 
 
-def visualize_graph(graph, structure, tm_indices, material_id=None, formula=None):
+def visualize_graph(graph, structure=None, tm_indices=None, material_id=None, formula=None, use_3d=False):
     """
     Visualize a connectivity graph of transition metal atoms.
     
@@ -21,197 +27,253 @@ def visualize_graph(graph, structure, tm_indices, material_id=None, formula=None
         tm_indices (list): Indices of transition metal atoms
         material_id (str, optional): Material ID for the title
         formula (str, optional): Chemical formula for the title
+        use_3d (bool, optional): Whether to use 3D visualization or 2D layout
         
     Returns:
         matplotlib.figure.Figure: The figure object
     """
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection='3d')
+    if len(graph.edges) < 1:
+        print("No edges to visualize")
+        fig = plt.figure(figsize=(10, 8))
+        return fig
     
-    # Get positions
-    pos = {}
-    for i, idx in enumerate(tm_indices):
-        pos[i] = structure[idx].coords
+    # Create edge weights based on distances
+    edge_weights = {
+        (u, v): 1 / max(structure.sites[tm_indices[u]].distance(structure.sites[tm_indices[v]]), 1e-5)
+        for u, v in graph.edges
+    }
     
     # Get element colors and labels
+    labels = {i: structure.sites[tm_indices[i]].specie.symbol for i in graph.nodes}
     colors = []
-    labels = {}
-    for i, idx in enumerate(tm_indices):
-        element = structure[idx].specie.symbol
-        colors.append(mcolors.CSS4_COLORS.get(element.lower(), 'gray'))
-        labels[i] = element
+    for i in graph.nodes:
+        element = structure.sites[tm_indices[i]].specie.symbol
+        colors.append(mcolors.CSS4_COLORS.get(element.lower(), 'skyblue'))
     
-    # Draw nodes
-    for node, (x, y, z) in pos.items():
-        ax.scatter(x, y, z, c=colors[node], s=100, edgecolor='k', alpha=0.7)
-        ax.text(x, y, z, labels[node], fontsize=12)
+    # Create distance labels
+    edge_labels = {
+        (u, v): f"{structure.sites[tm_indices[u]].distance(structure.sites[tm_indices[v]]):.2f} Å"
+        for u, v in graph.edges
+    }
     
-    # Draw edges
-    for u, v in graph.edges():
-        x = np.array([pos[u][0], pos[v][0]])
-        y = np.array([pos[u][1], pos[v][1]])
-        z = np.array([pos[u][2], pos[v][2]])
-        ax.plot(x, y, z, c='black', alpha=0.5)
+    if use_3d:
+        # 3D visualization
+        fig = plt.figure(figsize=(12, 10))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Get real atom positions
+        pos = {}
+        for i in graph.nodes:
+            pos[i] = structure.sites[tm_indices[i]].coords
+        
+        # Draw nodes
+        for node, (x, y, z) in pos.items():
+            ax.scatter(x, y, z, c=colors[node], s=150, edgecolor='black', alpha=0.9)
+            ax.text(x, y, z, labels[node], fontsize=12, fontweight='bold', ha='center', va='center')
+        
+        # Draw edges and edge labels
+        for u, v in graph.edges():
+            x = np.array([pos[u][0], pos[v][0]])
+            y = np.array([pos[u][1], pos[v][1]])
+            z = np.array([pos[u][2], pos[v][2]])
+            ax.plot(x, y, z, c='gray', alpha=0.7, linewidth=2)
+            
+            # Add distance label at the middle of the edge
+            mid_x, mid_y, mid_z = (x[0] + x[1]) / 2, (y[0] + y[1]) / 2, (z[0] + z[1]) / 2
+            ax.text(mid_x, mid_y, mid_z, edge_labels[(u, v)], fontsize=8, 
+                    bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.2'))
+        
+        # Set labels and title
+        ax.set_xlabel('X (Å)')
+        ax.set_ylabel('Y (Å)')
+        ax.set_zlabel('Z (Å)')
+        
+        # Set axis limits based on structure bounds with padding
+        bounds = structure.lattice.abc
+        ax.set_xlim([0, bounds[0]])
+        ax.set_ylim([0, bounds[1]])
+        ax.set_zlim([0, bounds[2]])
+    else:
+        # 2D visualization using Kamada-Kawai layout
+        fig = plt.figure(figsize=(12, 10))
+        ax = fig.add_subplot(111)
+        
+        pos = nx.kamada_kawai_layout(graph, weight=None)
+        
+        # Draw nodes
+        nx.draw_networkx_nodes(
+            graph, pos, node_size=800, node_color=colors, 
+            edgecolors="black", alpha=0.9, ax=ax
+        )
+        
+        # Draw edges
+        nx.draw_networkx_edges(graph, pos, width=2.0, alpha=0.7, edge_color="gray", ax=ax)
+        
+        # Add labels to nodes
+        for node, (x, y) in pos.items():
+            plt.text(
+                x, y, labels[node], fontsize=10, fontweight='bold',
+                color="black", ha="center", va="center"
+            )
+        
+        # Add edge labels
+        nx.draw_networkx_edge_labels(
+            graph, pos, edge_labels=edge_labels, font_size=10, 
+            bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.2'), ax=ax
+        )
+        
+        ax.axis("off")
     
-    # Set labels and title
-    ax.set_xlabel('X (Å)')
-    ax.set_ylabel('Y (Å)')
-    ax.set_zlabel('Z (Å)')
-    
+    # Set title
     title = "Transition Metal Connectivity Graph"
     if material_id and formula:
         title += f" for {formula} ({material_id})"
-    ax.set_title(title)
+    plt.title(title, fontsize=16)
     
-    # Set axis limits based on structure bounds with padding
-    bounds = structure.lattice.abc
-    ax.set_xlim([0, bounds[0]])
-    ax.set_ylim([0, bounds[1]])
-    ax.set_zlim([0, bounds[2]])
-    
+    plt.tight_layout()
     return fig
 
 
 def visualize_clusters_in_compound(structure, clusters):
     """
-    Visualize clusters within a compound structure.
-    
+    Visualizes clusters in the given structure.
+
     Parameters:
-        structure (Structure): The pymatgen Structure object
-        clusters (list): List of cluster dictionaries
-        
+        structure (Structure): The Pymatgen Structure object.
+        clusters (list[dict]): List of clusters. Each cluster is a dictionary containing:
+                               - 'sites': List of Pymatgen Site objects in the cluster.
+                               - 'size': Size of the cluster (number of sites).
+                               - 'average_distance': Average distance between sites in the cluster.
+                               - 'centroid': Centroid coordinates of the cluster.
+    
     Returns:
-        matplotlib.figure.Figure: The figure object
+        matplotlib.figure.Figure: The figure containing the visualization of the last cluster.
+                                  Returns None if no clusters to visualize.
     """
     if not clusters:
-        print("No clusters to visualize")
         return None
-    
-    fig = plt.figure(figsize=(12, 10))
-    ax = fig.add_subplot(111, projection='3d')
-    
-    # Plot all atoms as small gray spheres
-    for site in structure:
-        ax.scatter(site.coords[0], site.coords[1], site.coords[2], 
-                  c='lightgray', s=20, alpha=0.3)
-    
-    # Plot each cluster with a distinct color
-    colors = list(mcolors.TABLEAU_COLORS.values())
-    
-    for i, cluster_dict in enumerate(clusters):
-        cluster = cluster_dict["sites"]
-        color = colors[i % len(colors)]
         
-        # Draw cluster atoms
-        for site in cluster:
-            ax.scatter(site.coords[0], site.coords[1], site.coords[2], 
-                      c=color, s=100, edgecolor='black', alpha=0.7)
-            ax.text(site.coords[0], site.coords[1], site.coords[2], 
-                   site.specie.symbol, fontsize=10)
+    # Convert structure to ASE atoms just once
+    adaptor = AseAtomsAdaptor()
+    atoms = adaptor.get_atoms(structure)
+
+    # Dictionary to keep track of atom types in the legend (for optimization)
+    atom_types = {chemical_symbols[atom.number]: jmol_colors[atom.number] * 0.7 for atom in atoms}
+    
+    # Create a single figure for the first cluster 
+    # (returning multiple figures causes memory issues, so we'll just use the first one)
+    if len(clusters) > 0:
+        cluster = clusters[0]
         
-        # Draw cluster centroid
-        centroid = cluster_dict["centroid"]
-        ax.scatter(centroid[0], centroid[1], centroid[2], 
-                  c='red', marker='*', s=200, alpha=0.8)
+        # Set atom colors - low saturation for all atoms, high for cluster atoms
+        atom_colors = np.array([jmol_colors[atom.number] * 0.7 for atom in atoms])
         
-        # Draw connections within cluster
-        for i, site1 in enumerate(cluster):
-            for site2 in cluster[i+1:]:
-                if site1.distance(site2) <= cluster_dict["average_distance"] * 1.1:
-                    x = np.array([site1.coords[0], site2.coords[0]])
-                    y = np.array([site1.coords[1], site2.coords[1]])
-                    z = np.array([site1.coords[2], site2.coords[2]])
-                    ax.plot(x, y, z, c=color, alpha=0.7, linewidth=2)
+        # Highlight cluster atoms
+        try:
+            cluster_indices = [structure.sites.index(site) for site in cluster["sites"]]
+            for idx in cluster_indices:
+                if idx < len(atom_colors):  # Safety check
+                    atom_colors[idx] = [1.0, 0.0, 0.0]  # High-saturation red for cluster atoms
+        except ValueError as e:
+            # Handle case where site is not found in structure
+            pass
+
+        # Create a Matplotlib figure and axis
+        fig, ax = plt.subplots(figsize=(12, 10))
+
+        # Plot atoms with specified colors and perspective view
+        plot_atoms(atoms, ax, radii=0.5, rotation="45x,30y,0z", colors=atom_colors)
+        
+        # Add centroid marker if available
+        if "centroid" in cluster:
+            # Get the plot transformation
+            ax_transform = ax.transData
+            # Plot the centroid as a star marker
+            centroid = cluster["centroid"]
+            ax.scatter(centroid[0], centroid[1], transform=ax_transform, 
+                      color='gold', marker='*', s=200, zorder=10, 
+                      edgecolor='black', label='Centroid')
+
+        # Add a legend for atom types
+        legend_handles = []
+        for symbol, color in atom_types.items():
+            legend_handles.append(
+                plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=color, markersize=10, label=symbol)
+            )
+        legend_handles.append(
+            plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=[1.0, 0.0, 0.0], markersize=10, label='Cluster Atoms')
+        )
+        if "centroid" in cluster:
+            legend_handles.append(
+                plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='gold', markersize=10, label='Centroid')
+            )
+        ax.legend(handles=legend_handles, loc='lower left', bbox_to_anchor=(1, 1), title='Atom Types')
+
+        # Add a title with cluster info
+        ax.set_title(f"Cluster - Size: {cluster['size']}, Avg Distance: {cluster['average_distance']:.2f} Å")
+        
+        # Remove x and y axes
+        ax.axis('off')
+        plt.tight_layout()
+        return fig
     
-    # Set labels
-    ax.set_xlabel('X (Å)')
-    ax.set_ylabel('Y (Å)')
-    ax.set_zlabel('Z (Å)')
-    ax.set_title(f'Clusters in {structure.composition.reduced_formula} - {len(clusters)} clusters')
-    
-    # Set axis limits based on structure bounds with padding
-    bounds = structure.lattice.abc
-    ax.set_xlim([0, bounds[0]])
-    ax.set_ylim([0, bounds[1]])
-    ax.set_zlim([0, bounds[2]])
-    
-    return fig
+    # If no clusters, return None
+    return None
 
 
-def visualize_cluster_lattice(structure, rotation_matrix=None):
+def visualize_cluster_lattice(conventional_structure, rot="80x,20y,0z"):
     """
-    Visualize a structure with highlighted cluster lattice.
-    
+    Visualizes the conventional unit cell with cluster lattice sites labeled as C(i).
+
     Parameters:
-        structure (Structure): The pymatgen Structure object
-        rotation_matrix (numpy.ndarray, optional): 3x3 rotation matrix
+        conventional_structure (Structure): The Pymatgen Structure object representing the generated unit cell.
+        rot (str): Rotation parameter for ASE's plot_atoms (e.g., "45x,30y,0z").
         
     Returns:
         matplotlib.figure.Figure: The figure object
     """
-    fig = plt.figure(figsize=(10, 10))
-    ax = fig.add_subplot(111, projection='3d')
-    
-    # Apply rotation if provided
-    if rotation_matrix is not None:
-        # Convert fractional coordinates to cartesian
-        cart_coords = np.array([site.coords for site in structure])
-        # Apply rotation
-        rotated_coords = np.dot(cart_coords, rotation_matrix)
-    else:
-        rotated_coords = np.array([site.coords for site in structure])
-    
-    # Plot atoms
-    for i, site in enumerate(structure):
-        element = site.specie.symbol
-        color = mcolors.CSS4_COLORS.get(element.lower(), 'gray')
-        ax.scatter(rotated_coords[i, 0], rotated_coords[i, 1], rotated_coords[i, 2], 
-                  c=color, s=80, alpha=0.7, edgecolor='black')
-        ax.text(rotated_coords[i, 0], rotated_coords[i, 1], rotated_coords[i, 2], 
-               element, fontsize=8)
-    
-    # Plot unit cell
-    lattice = structure.lattice
-    vertices = np.array([
-        [0, 0, 0],
-        [1, 0, 0],
-        [1, 1, 0],
-        [0, 1, 0],
-        [0, 0, 1],
-        [1, 0, 1],
-        [1, 1, 1],
-        [0, 1, 1]
-    ])
-    
-    # Convert fractional to cartesian
-    vertices_cart = np.dot(vertices, lattice.matrix)
-    
-    # Apply rotation if provided
-    if rotation_matrix is not None:
-        vertices_cart = np.dot(vertices_cart, rotation_matrix)
-    
-    # Define edges of the unit cell
-    edges = [
-        (0, 1), (1, 2), (2, 3), (3, 0),  # Bottom face
-        (4, 5), (5, 6), (6, 7), (7, 4),  # Top face
-        (0, 4), (1, 5), (2, 6), (3, 7)   # Connecting edges
-    ]
-    
-    # Plot edges
-    for start, end in edges:
-        ax.plot([vertices_cart[start, 0], vertices_cart[end, 0]],
-                [vertices_cart[start, 1], vertices_cart[end, 1]],
-                [vertices_cart[start, 2], vertices_cart[end, 2]],
-                'k-', alpha=0.5)
-    
-    # Set labels
-    ax.set_xlabel('X (Å)')
-    ax.set_ylabel('Y (Å)')
-    ax.set_zlabel('Z (Å)')
-    ax.set_title(f'Structure Visualization: {structure.composition.reduced_formula}')
-    
-    # Auto-scale axes
-    ax.set_box_aspect([1, 1, 1])
+    # Create a copy of the structure to avoid modifying the original
+    structure_copy = conventional_structure.copy()
+
+    # Replace DummySpecies with a real element (e.g., 'C')
+    new_sites = []
+    for site in structure_copy.sites:
+        if isinstance(site.specie, DummySpecies):
+            # Create a new site with 'C' as the species
+            new_site = site.__class__(
+                lattice=structure_copy.lattice,
+                species='C',
+                coords=site.frac_coords,
+                properties=site.properties
+            )
+            new_sites.append(new_site)
+        else:
+            new_sites.append(site)
+
+    # Update the structure's sites with the new list
+    structure_copy._sites = new_sites
+
+    # Convert the structure to an ASE Atoms object
+    adaptor = AseAtomsAdaptor()
+    atoms = adaptor.get_atoms(structure_copy)
+
+    # Assign a unique "C(i)" label to each unique cluster site
+    unique_sites = {}
+    atom_colors = np.array([jmol_colors[atom.number] * 0.5 for atom in atoms])  # Low-saturation colors
+
+    for i, site in enumerate(structure_copy.sites):
+        coord_tuple = tuple(np.round(site.frac_coords, 3))  # Use fractional coordinates to identify uniqueness
+        if coord_tuple not in unique_sites:
+            unique_sites[coord_tuple] = f'C({len(unique_sites) + 1})'  # Assign cluster index
+
+    # Create Matplotlib figure
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    # Plot using ASE's plot_atoms
+    plot_atoms(atoms, ax, radii=0.5, rotation=rot, colors=atom_colors)
+
+    # Remove axes and display plot
+    ax.axis("off")
+    plt.title("Cluster Lattice in the Conventional Unit Cell")
     plt.tight_layout()
-    
-    return fig 
+    return fig

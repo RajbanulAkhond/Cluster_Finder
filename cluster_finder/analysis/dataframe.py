@@ -12,13 +12,14 @@ from pymatgen.core.sites import PeriodicSite
 from ..core.structure import generate_lattice_with_clusters, generate_supercell
 from ..analysis.postprocess import get_point_group_order, get_space_group_order, classify_dimensionality
 
-def cluster_compounds_dataframe(compounds_with_clusters, compound_system=None):
+def cluster_compounds_dataframe(compounds_with_clusters, compound_system=None, verbose=False):
     """
     Create a dataframe with cluster information for all compounds.
     
     Parameters:
         compounds_with_clusters (list): List of compound dictionaries with clusters
         compound_system (str, optional): Name of the compound system
+        verbose (bool, optional): If True, include all unique keys from compounds as columns
         
     Returns:
         pandas.DataFrame: Dataframe with cluster information
@@ -42,6 +43,7 @@ def cluster_compounds_dataframe(compounds_with_clusters, compound_system=None):
         avg_distances = [cluster.get("average_distance") for cluster in clusters] if clusters else []
         cluster_sites = [[site.as_dict() for site in cluster.get("sites")] for cluster in clusters] if clusters else []
 
+        # Create basic record with default columns
         record = {
             "compound_system": compound_system,
             "material_id": material_id,
@@ -53,11 +55,21 @@ def cluster_compounds_dataframe(compounds_with_clusters, compound_system=None):
             "cluster_sites": cluster_sites,
             "structure": structure,  # Already a dictionary
         }
+        
+        # If verbose, add all unique keys from the compound
+        if verbose:
+            for key, value in compound.items():
+                if key not in record:  # Only add if not already in record
+                    # Handle objects that need conversion
+                    if isinstance(value, Structure):
+                        value = value.as_dict()
+                    record[key] = value
+        
         records.append(record)
 
     # Create DataFrame from list of dictionaries
     df = pd.DataFrame(records)
-    return df 
+    return df
 
 def postprocessed_clusters_dataframe(data_source):
     """
@@ -92,6 +104,7 @@ def postprocessed_clusters_dataframe(data_source):
     
     records = []
     for _, row in df.iterrows():
+        compound_system = row['compound_system']
         material_id = row['material_id']
         formula = row['formula']
         magnetization = row['magnetization']
@@ -105,10 +118,17 @@ def postprocessed_clusters_dataframe(data_source):
         if isinstance(average_distance, str):
             average_distance = ast.literal_eval(average_distance)
         
-        # Handle both string and list inputs for structure and cluster_sites
+        # Handle both string and dictionary inputs for structure
         structure_data = row['structure']
         if isinstance(structure_data, str):
-            structure = Structure.from_str(structure_data, fmt="json")
+            try:
+                structure_data = ast.literal_eval(structure_data)
+            except:
+                structure = Structure.from_str(structure_data, fmt="json")
+        
+        # Convert dictionary to Structure object
+        if isinstance(structure_data, dict):
+            structure = Structure.from_dict(structure_data)
         else:
             structure = structure_data
         
@@ -127,10 +147,13 @@ def postprocessed_clusters_dataframe(data_source):
                 'sites': sites_objects,
                 'label': f'X{i}'  # Add a unique label for each cluster
             })
+        
         conventional_structure, space_group, point_groups = generate_lattice_with_clusters(structure, clusters)
         supercell_structure = generate_supercell(conventional_structure, (20, 20, 20))
         predicted_dimentionality, norm_svals = classify_dimensionality(supercell_structure)
+        
         record = {
+            "compound_system": compound_system,
             "material_id": material_id,
             "formula": formula,
             "magnetization": magnetization,

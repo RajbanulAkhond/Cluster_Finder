@@ -84,7 +84,7 @@ class TestStructure:
         supercell = generate_supercell(structure, [2,2,2])
         
         # Check supercell size (should be 8x original)
-        assert len(supercell) == len(structure)  # Original structure has 1 atom
+        assert len(structure) == 1  # Original structure has 1 atom
         assert len(supercell) == 8  # Supercell should have 8 atoms
         
         # Check lattice parameters
@@ -178,4 +178,4 @@ class TestClusters:
         ]
         
         unique_clusters = identify_unique_clusters(clusters)
-        assert len(unique_clusters) == 1  # Only one unique cluster 
+        assert len(unique_clusters) == 1  # Only one unique cluster

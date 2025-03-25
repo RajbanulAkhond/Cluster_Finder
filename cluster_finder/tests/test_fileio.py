@@ -95,8 +95,9 @@ class TestFileIO:
             "average_distance": [[2.5]],  # List containing a list with one value
             "num_clusters": [1],
             "magnetization": [5.0],
-            "structure": [simple_cubic_structure.to(fmt="json")],
-            "cluster_sites": [str(cluster_sites_json)]
+            "structure": [simple_cubic_structure.as_dict()],  # Changed to as_dict() instead of to(fmt="json")
+            "cluster_sites": [str(cluster_sites_json)],
+            "compound_system": ["Fe-O"]
         }
         df = pd.DataFrame(data)
         
@@ -121,4 +122,4 @@ class TestFileIO:
             "cluster_sites"
         ]
         for col in expected_columns:
-            assert col in processed_df.columns, f"Column {col} not found in processed DataFrame" 
+            assert col in processed_df.columns, f"Column {col} not found in processed DataFrame"

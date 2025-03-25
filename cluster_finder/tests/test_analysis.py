@@ -89,8 +89,12 @@ class TestAnalysis:
         }
         df = pd.DataFrame(data)
         
-        # Rank clusters
-        ranked_df = rank_clusters(df)
+        # Rank clusters with explicit custom_props and weights to ensure energy_above_hull is used
+        ranked_df = rank_clusters(
+            df,
+            custom_props=["energy_above_hull"],
+            prop_weights={"energy_above_hull": -2.0}  # Lower energy_above_hull is better
+        )
         
         # Check that we have the expected columns
         assert "max_point_group_order" in ranked_df.columns
@@ -98,7 +102,7 @@ class TestAnalysis:
         assert "rank_score" in ranked_df.columns
         
         # Check that ranking is correct
-        # With the default weights, energy_above_hull has higher weight (-2.0) than min_avg_distance (-1.0)
+        # With the specified weights, energy_above_hull has higher weight (-2.0) than min_avg_distance (-1.0)
         # id3 should be ranked highest due to much lower energy_above_hull value
         assert ranked_df.iloc[0]["material_id"] == "id3"  # Lowest energy_above_hull
     
@@ -208,3 +212,34 @@ class TestAnalysis:
         
         # Despite id3 having lowest energy, id2 should rank highest due to extreme min_avg_distance weight
         assert ranked_df_custom.iloc[0]["material_id"] == "id2"
+    
+    def test_rank_clusters_with_non_numerical_values(self):
+        """Test ranking clusters with non-numerical property values."""
+        # Create test data with a non-numerical property
+        data = {
+            "material_id": ["id1", "id2", "id3"],
+            "space_group": ["P1", "P1", "P1"],
+            "point_group": ["1", "1", "1"],
+            "cluster_sizes": ["[2]", "[2]", "[2]"],
+            "average_distance": ["[2.5]", "[2.2]", "[2.4]"],
+            "min_avg_distance": [2.5, 2.2, 2.4],
+            "energy_above_hull": [0.3, 0.2, 0.01],  # Numerical property
+            "symmetry": ["Object1", "Object2", "Object3"]  # Non-numerical property
+        }
+        df = pd.DataFrame(data)
+        
+        # Rank clusters with both numerical and non-numerical properties
+        ranked_df = rank_clusters(
+            df,
+            custom_props=["energy_above_hull", "symmetry"],
+            prop_weights={"energy_above_hull": -2.0}
+        )
+        
+        # Check that we have the expected columns, including the non-numerical property
+        assert "symmetry" in ranked_df.columns
+        assert "energy_above_hull" in ranked_df.columns
+        assert "rank_score" in ranked_df.columns
+        
+        # Check that ranking is correct - should ignore the non-numerical property
+        # and rank based on energy_above_hull
+        assert ranked_df.iloc[0]["material_id"] == "id3"  # Lowest energy_above_hull
