@@ -46,14 +46,14 @@ from cluster_finder.io.fileio import export_csv_data
 
 # Define constants
 API_KEY = "6rcVBNjGRVyfiGPYaLy2xVJNB9X8cN8q"
-ELEMENTS = ["Nb", "Cl"]
-OUTPUT_PDF = "nb_cl_analysis_results.pdf"
-RAW_OUTPUT_CSV = "nb_cl_analysis_results_raw.csv"
-SUMMARY_OUTPUT_CSV = "nb_cl_analysis_results_summary.csv"
+ELEMENTS = ["Ta", "O"]
+OUTPUT_PDF = "ta_o_analysis_results.pdf"
+RAW_OUTPUT_CSV = "ta_o_analysis_results_raw.csv"
+SUMMARY_OUTPUT_CSV = "ta_o_analysis_results_summary.csv"
 
 def main():
     """Main function to execute the workflow."""
-    print("Starting Nb-Cl compounds analysis...")
+    print("Starting compounds analysis...")
     
     # 1. Search for compounds with Nb and Cl
     print(f"Searching for compounds with elements: {ELEMENTS}")
@@ -62,7 +62,7 @@ def main():
         api_key=API_KEY,
         min_elements=2,
         max_elements=4,
-        min_magnetization=0.01
+        min_magnetization=0.1
     )
     print(f"Found {len(compounds)} compounds containing {ELEMENTS}")
     
@@ -80,7 +80,7 @@ def main():
  
     # Create a dataframe from compounds using the function from dataframe.py
     print("Creating compounds dataframe...")
-    compounds_df = cluster_compounds_dataframe(compounds_with_clusters, compound_system="Nb-Cl", verbose=True)
+    compounds_df = cluster_compounds_dataframe(compounds_with_clusters, compound_system="-".join(ELEMENTS), verbose=True)
     
     # Post-process the ranked dataframe to add additional calculated properties
     print("Post-processing compounds dataframe...")
@@ -237,8 +237,8 @@ def main():
             "material_id": material_id,
             "formula": data["formula"],
             "num_clusters": len(data["clusters"]),
-            "avg_size": np.mean([cluster["size"] for cluster in data["clusters"]]) if data["clusters"] else 0,
-            "avg_distance": np.mean([cluster["average_distance"] for cluster in data["clusters"]]) if data["clusters"] else 0,
+            "cluster_sizes": [cluster["size"] for cluster in data["clusters"]] if data["clusters"] else [],
+            "average_distance": np.mean([cluster["average_distance"] for cluster in data["clusters"]]) if data["clusters"] else 0,
             "rank_score": data.get("rank_score", 0)  # Include rank score here
         }
         for material_id, data in processed_data.items()
@@ -249,7 +249,7 @@ def main():
     with PdfPages(OUTPUT_PDF) as pdf:
         # Create a title page
         plt.figure(figsize=(8.5, 11))
-        plt.text(0.5, 0.5, f"Analysis of Nb-Cl Compounds\nCluster Finder Results", 
+        plt.text(0.5, 0.5, f"Analysis of {'-'.join(ELEMENTS)} Compounds\nCluster Finder Results", 
                  horizontalalignment='center', verticalalignment='center', fontsize=24)
         plt.axis('off')
         pdf.savefig()
@@ -269,16 +269,29 @@ def main():
             pdf.savefig()
             plt.close()
 
-            # Plot average cluster size distribution
+            # Create a figure for cluster size and distance distributions
+            plt.figure(figsize=(8.5, 11))
+            
+            # Plot cluster size distribution - counting each individual cluster size instead of averaging
             plt.subplot(211)
-            plt.hist(cluster_stats_df["avg_size"], bins=20)
-            plt.xlabel("Average Cluster Size")
-            plt.ylabel("Count")
-            plt.title("Distribution of Average Cluster Sizes")
+            # Flatten all cluster sizes into a single list
+            all_cluster_sizes = []
+            for sizes in cluster_stats_df["cluster_sizes"]:
+                all_cluster_sizes.extend(sizes)
+            
+            if all_cluster_sizes:
+                plt.hist(all_cluster_sizes, bins=range(min(all_cluster_sizes), max(all_cluster_sizes)+2), align='left')
+                plt.xlabel("Cluster Size (number of atoms)")
+                plt.ylabel("Count")
+                plt.title("Distribution of Individual Cluster Sizes")
+            else:
+                plt.text(0.5, 0.5, "No cluster size data available", 
+                        horizontalalignment='center', fontsize=14)
+                plt.title("Distribution of Individual Cluster Sizes")
             
             # Plot average distance distribution
             plt.subplot(212)
-            plt.hist(cluster_stats_df["avg_distance"], bins=20)
+            plt.hist(cluster_stats_df["average_distance"], bins=20)
             plt.xlabel("Average Distance (Å)")
             plt.ylabel("Count")
             plt.title("Distribution of Average Cluster Distances")
@@ -286,8 +299,98 @@ def main():
             plt.tight_layout()
             pdf.savefig()
             plt.close()
+            
+            # Add combined point group and space group distribution plots on one page
+            if 'point_groups' in ranked_df.columns and 'space_group' in ranked_df.columns:
+                plt.figure(figsize=(8.5, 11))
+                
+                # First subplot: Point group distribution
+                plt.subplot(211)
+                
+                # Extract actual point group symbols (not X0, X1, etc.)
+                all_point_groups = []
+                
+                # Process each compound's point groups data
+                for _, row in ranked_df.iterrows():
+                    try:
+                        # Get point group data
+                        pg_data = row['point_groups']
+                        
+                        # Handle different formats
+                        if isinstance(pg_data, str):
+                            try:
+                                pg_data = ast.literal_eval(pg_data)
+                            except (ValueError, SyntaxError) as e:
+                                print(f"Error parsing point groups: {e}, value was: {pg_data}")
+                                continue
+                        
+                        # Extract point group symbols from the dictionary where keys are X0, X1, etc.
+                        # and values are the actual point group symbols like Ci, D3h, etc.
+                        if isinstance(pg_data, dict):
+                            for cluster_label, point_group_symbol in pg_data.items():
+                                if point_group_symbol and point_group_symbol != 'None':
+                                    all_point_groups.append(point_group_symbol)
+                                    
+                    except Exception as e:
+                        print(f"Error processing point groups: {e}")
+                
+                if all_point_groups:
+                    # Count occurrences of each point group
+                    pg_counts = pd.Series(all_point_groups).value_counts()
+                    
+                    # Plot point group distribution
+                    if not pg_counts.empty:
+                        # Ensure the point group names are properly displayed
+                        x_labels = [str(name) for name in pg_counts.index]
+                        
+                        # Create the bar plot with clear x labels
+                        bars = plt.bar(range(len(pg_counts)), pg_counts.values)
+                        
+                        # Set the x-tick positions and labels
+                        plt.xticks(range(len(pg_counts)), x_labels, rotation=45, ha='right')
+                        
+                        plt.xlabel("Point Group")
+                        plt.ylabel("Count")
+                        plt.title("Distribution of Cluster Point Groups")
+                        
+                        # Add count labels above bars
+                        for i, bar in enumerate(bars):
+                            height = bar.get_height()
+                            plt.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                                    f'{int(height)}',
+                                    ha='center', va='bottom', rotation=0)
+                
+                # Second subplot: Space group distribution
+                plt.subplot(212)
+                
+                # Count occurrences of each space group
+                sg_counts = ranked_df['space_group'].value_counts().head(15)  # Show top 15 space groups
+                
+                # Plot space group distribution
+                bars = plt.bar(sg_counts.index.astype(str), sg_counts.values)
+                plt.xlabel("Space Group")
+                plt.ylabel("Count")
+                plt.title("Distribution of Compound Space Groups (Top 15)")
+                plt.xticks(rotation=45, ha='right')
+                
+                # Add count labels above bars
+                for bar in bars:
+                    height = bar.get_height()
+                    plt.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                            f'{int(height)}',
+                            ha='center', va='bottom', rotation=0)
+                
+                # Adjust layout to prevent overlap
+                plt.tight_layout()
+                pdf.savefig()
+                plt.close()
+            else:
+                if 'point_groups' not in ranked_df.columns:
+                    print("'point_groups' column not found in the dataframe")
+                if 'space_group' not in ranked_df.columns:
+                    print("'space_group' column not found in the dataframe")
         
-        # 2. SECOND: Ranked Clusters Dataframe - faster with only essential plots
+        # 2. SECOND: Ranked Clusters Dataframe - improving table formatting
         if not ranked_df.empty:
             # Create a figure for dimensionality distribution
             plt.figure(figsize=(8.5, 11))
@@ -301,32 +404,75 @@ def main():
             pdf.savefig()
             plt.close()
 
-            # Add ranked dataframe summary visualization - faster with fewer compounds
+            # Add ranked dataframe summary visualization - improving table formatting
             plt.figure(figsize=(8.5, 11))
             plt.text(0.5, 0.95, "Ranked Compounds Summary", 
                     horizontalalignment='center', fontsize=18)
             
-            # Add the ranked dataframe to the PDF - faster with fewer columns
+            # Add the ranked dataframe to the PDF - with better formatting
             fig, ax = plt.subplots(figsize=(8.5, 11))
             ax.axis('off')
             
-            # Select key columns for display - fewer for speed
-            display_columns = ["material_id", "formula", "predicted_dimentionality", "rank_score"]
+            # Select key columns for display
+            display_columns = ["material_id", "formula", "magnetization", "num_clusters", "predicted_dimentionality", "energy_above_hull"]
+            
             if all(col in ranked_df.columns for col in display_columns):
-                display_df = ranked_df[display_columns].head(10)
-                tbl = ax.table(
+                # Get top 10 compounds for display
+                display_df = ranked_df[display_columns].head(10).copy()
+                
+                # Format numbers to prevent overlap and make table more readable
+                display_df['magnetization'] = display_df['magnetization'].round(2)
+                
+                if 'energy_above_hull' in display_df.columns:
+                    display_df['energy_above_hull'] = display_df['energy_above_hull'].round(3)
+                
+                # Rename columns for better display
+                column_labels = [
+                    "MP ID", 
+                    "Formula",
+                    "Mag.",
+                    "# Clusters",
+                    "Dim.",
+                    "E above hull"
+                ]
+                
+                # Create the table with improved formatting
+                table = ax.table(
                     cellText=display_df.values,
-                    colLabels=display_df.columns,
+                    colLabels=column_labels,
                     loc='center',
                     cellLoc='center'
                 )
-                tbl.auto_set_font_size(False)
-                tbl.set_fontsize(8)
-                tbl.scale(1, 1.5)
-                plt.title("Top 10 Ranked Compounds")
+                
+                # Format table appearance
+                table.auto_set_font_size(False)
+                table.set_fontsize(9)
+                
+                # Adjust column widths based on content
+                table.scale(1, 1.8)  # Scale the entire table
+                
+                # Apply custom column widths (adjust total to 1.0)
+                col_widths = [0.15, 0.2, 0.1, 0.12, 0.08, 0.15]
+                for i, width in enumerate(col_widths):
+                    for j in range(len(display_df) + 1):  # +1 for header row
+                        cell = table[j, i]
+                        cell.set_width(width)
+                
+                # Style header row
+                for i in range(len(column_labels)):
+                    table[0, i].set_text_props(weight='bold', color='white')
+                    table[0, i].set_facecolor('#4472C4')
+                
+                # Alternate row colors for better readability
+                for i in range(1, len(display_df) + 1):
+                    if i % 2 == 0:
+                        for j in range(len(column_labels)):
+                            table[i, j].set_facecolor('#E6F0FF')
+                
+                plt.title("Top 10 Ranked Compounds", pad=20)
                 plt.tight_layout()
-                pdf.savefig()
-                plt.close()
+                pdf.savefig(fig)
+                plt.close(fig)
         
         # 4. FOURTH: Individual Compound Details - more efficiently with fewer compounds
         print("Generating individual compound visualizations...")
@@ -359,9 +505,6 @@ def main():
                 if formation_energy is not None:
                     plt.text(0.5, 0.70, f"Formation Energy: {formation_energy} eV/atom", 
                             horizontalalignment='center', fontsize=14)
-                
-                plt.text(0.5, 0.65, f"Rank Score: {compound_row['rank_score'].values[0]:.4f}", 
-                        horizontalalignment='center', fontsize=14)
             
             # Add cluster statistics
             cluster_stats = {
@@ -372,7 +515,6 @@ def main():
             
             plt.text(0.5, 0.55, "Cluster Statistics:", horizontalalignment='center', fontsize=16)
             stat_text = f"Number of Clusters: {cluster_stats['num_clusters']}\n\n" \
-                        f"Average Cluster Size: {cluster_stats['avg_size']:.2f} atoms\n" \
                         f"Average Distance: {cluster_stats['avg_distance']:.3f} Å\n"
             plt.text(0.5, 0.35, stat_text, horizontalalignment='center', fontsize=14)
             plt.axis('off')
