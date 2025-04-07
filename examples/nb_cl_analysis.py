@@ -45,11 +45,11 @@ from cluster_finder.visualization.visualize import (
 from cluster_finder.io.fileio import export_csv_data
 
 # Define constants
-API_KEY = "6rcVBNjGRVyfiGPYaLy2xVJNB9X8cN8q"
-ELEMENTS = ["Ta", "O"]
-OUTPUT_PDF = "ta_o_analysis_results.pdf"
-RAW_OUTPUT_CSV = "ta_o_analysis_results_raw.csv"
-SUMMARY_OUTPUT_CSV = "ta_o_analysis_results_summary.csv"
+API_KEY = "Your_API_Key_Here"  # Replace with your Materials Project API key
+ELEMENTS = ["Nb", "Cl"]
+OUTPUT_PDF = "nb_cl_analysis_results.pdf"
+RAW_OUTPUT_CSV = "nb_cl_analysis_results_raw.csv"
+SUMMARY_OUTPUT_CSV = "nb_cl_analysis_results_summary.csv"
 
 def main():
     """Main function to execute the workflow."""
