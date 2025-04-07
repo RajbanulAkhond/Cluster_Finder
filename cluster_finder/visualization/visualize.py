@@ -134,10 +134,10 @@ def visualize_graph(graph, structure=None, tm_indices=None, material_id=None, fo
     return fig
 
 
-def visualize_clusters_in_compound(structure, clusters):
+def visualize_clusters_in_compound(structure, clusters, cluster_index=None, rotation="45x,30y,0z"):
     """
     Visualizes clusters in the given structure.
-
+    
     Parameters:
         structure (Structure): The Pymatgen Structure object.
         clusters (list[dict]): List of clusters. Each cluster is a dictionary containing:
@@ -145,9 +145,12 @@ def visualize_clusters_in_compound(structure, clusters):
                                - 'size': Size of the cluster (number of sites).
                                - 'average_distance': Average distance between sites in the cluster.
                                - 'centroid': Centroid coordinates of the cluster.
+        cluster_index (int, optional): Index of the specific cluster to visualize.
+                                      If None, the first cluster is visualized.
+        rotation (str, optional): Rotation parameter for ASE's plot_atoms (e.g., "45x,30y,0z").
     
     Returns:
-        matplotlib.figure.Figure: The figure containing the visualization of the last cluster.
+        matplotlib.figure.Figure: The figure containing the visualization of the selected cluster.
                                   Returns None if no clusters to visualize.
     """
     if not clusters:
@@ -156,69 +159,74 @@ def visualize_clusters_in_compound(structure, clusters):
     # Convert structure to ASE atoms just once
     adaptor = AseAtomsAdaptor()
     atoms = adaptor.get_atoms(structure)
-
+    
     # Dictionary to keep track of atom types in the legend (for optimization)
     atom_types = {chemical_symbols[atom.number]: jmol_colors[atom.number] * 0.7 for atom in atoms}
     
-    # Create a single figure for the first cluster 
-    # (returning multiple figures causes memory issues, so we'll just use the first one)
-    if len(clusters) > 0:
+    # Select which cluster to visualize
+    if cluster_index is not None and 0 <= cluster_index < len(clusters):
+        # Use the specified cluster
+        cluster = clusters[cluster_index]
+    elif len(clusters) > 0:
+        # Default to the first cluster
         cluster = clusters[0]
+    else:
+        return None
         
-        # Set atom colors - low saturation for all atoms, high for cluster atoms
-        atom_colors = np.array([jmol_colors[atom.number] * 0.7 for atom in atoms])
-        
-        # Highlight cluster atoms
-        try:
-            cluster_indices = [structure.sites.index(site) for site in cluster["sites"]]
-            for idx in cluster_indices:
-                if idx < len(atom_colors):  # Safety check
-                    atom_colors[idx] = [1.0, 0.0, 0.0]  # High-saturation red for cluster atoms
-        except ValueError as e:
-            # Handle case where site is not found in structure
-            pass
-
-        # Create a Matplotlib figure and axis
-        fig, ax = plt.subplots(figsize=(12, 10))
-
-        # Plot atoms with specified colors and perspective view
-        plot_atoms(atoms, ax, radii=0.5, rotation="45x,30y,0z", colors=atom_colors)
-        
-        # Add centroid marker if available
-        if "centroid" in cluster:
-            # Get the plot transformation
-            ax_transform = ax.transData
-            # Plot the centroid as a star marker
-            centroid = cluster["centroid"]
-            ax.scatter(centroid[0], centroid[1], transform=ax_transform, 
-                      color='gold', marker='*', s=200, zorder=10, 
-                      edgecolor='black', label='Centroid')
-
-        # Add a legend for atom types
-        legend_handles = []
-        for symbol, color in atom_types.items():
-            legend_handles.append(
-                plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=color, markersize=10, label=symbol)
-            )
-        legend_handles.append(
-            plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=[1.0, 0.0, 0.0], markersize=10, label='Cluster Atoms')
-        )
-        if "centroid" in cluster:
-            legend_handles.append(
-                plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='gold', markersize=10, label='Centroid')
-            )
-        ax.legend(handles=legend_handles, loc='lower left', bbox_to_anchor=(1, 1), title='Atom Types')
-
-        # Add a title with cluster info
-        ax.set_title(f"Cluster - Size: {cluster['size']}, Avg Distance: {cluster['average_distance']:.2f} Å")
-        
-        # Remove x and y axes
-        ax.axis('off')
-        plt.tight_layout()
-        return fig
+    # Set atom colors - low saturation for all atoms, high for cluster atoms
+    atom_colors = np.array([jmol_colors[atom.number] * 0.7 for atom in atoms])
     
-    # If no clusters, return None
-    return None
+    # Highlight cluster atoms
+    try:
+        cluster_indices = [structure.sites.index(site) for site in cluster["sites"]]
+        for idx in cluster_indices:
+            if idx < len(atom_colors):  # Safety check
+                atom_colors[idx] = [1.0, 0.0, 0.0]  # High-saturation red for cluster atoms
+    except ValueError as e:
+        # Handle case where site is not found in structure
+        pass
+        
+    # Create a Matplotlib figure and axis
+    fig, ax = plt.subplots(figsize=(12, 10))
+    
+    # Plot atoms with specified colors and perspective view
+    plot_atoms(atoms, ax, radii=0.5, rotation=rotation, colors=atom_colors)
+    
+    # Add centroid marker if available
+    if "centroid" in cluster:
+        # Get the plot transformation
+        ax_transform = ax.transData
+        # Plot the centroid as a star marker
+        centroid = cluster["centroid"]
+        ax.scatter(centroid[0], centroid[1], transform=ax_transform, 
+                  color='gold', marker='*', s=200, zorder=10, 
+                  edgecolor='black', label='Centroid')
+                  
+    # Add a legend for atom types
+    legend_handles = []
+    for symbol, color in atom_types.items():
+        legend_handles.append(
+            plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=color, markersize=10, label=symbol)
+        )
+    legend_handles.append(
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=[1.0, 0.0, 0.0], markersize=10, label='Cluster Atoms')
+    )
+    if "centroid" in cluster:
+        legend_handles.append(
+            plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='gold', markersize=10, label='Centroid')
+        )
+    ax.legend(handles=legend_handles, loc='lower left', bbox_to_anchor=(1, 1), title='Atom Types')
+    
+    # Add cluster number to the title
+    title = f"Cluster {cluster_index + 1 if cluster_index is not None else 1}/{len(clusters)}"
+    
+    # Add a title with cluster info
+    ax.set_title(f"{title} - Size: {cluster['size']}, Avg Distance: {cluster['average_distance']:.2f} Å")
+    
+    # Remove x and y axes
+    ax.axis('off')
+    plt.tight_layout()
+    return fig
 
 
 def visualize_cluster_lattice(conventional_structure, rot="80x,20y,0z"):

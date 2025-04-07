@@ -7,6 +7,7 @@ of the cluster_finder package.
 
 import os
 import sys
+import re
 import argparse
 import json
 import numpy as np
@@ -15,6 +16,7 @@ from typing import List, Optional
 from pathlib import Path
 from pymatgen.core.structure import Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+from mp_api.client import MPRester
 
 from .core.graph import create_connectivity_matrix, structure_to_graph
 from .core.clusters import (
@@ -32,7 +34,7 @@ from .io.fileio import (
     import_csv_data
 )
 from .core.utils import cluster_summary_stat
-from .utils.helpers import get_transition_metals
+from .utils.helpers import get_transition_metals, get_mp_property
 from .analysis.dataframe import cluster_compounds_dataframe
 from .analysis.postprocess import rank_clusters
 
@@ -66,6 +68,16 @@ def get_parser():
     analyze_parser.add_argument('json_file', help='JSON file with cluster data')
     analyze_parser.add_argument('--output', '-o', help='Output file prefix')
     analyze_parser.add_argument('--format', choices=['csv', 'json', 'both'], default='csv', help='Output format (default: csv)')
+    analyze_parser.add_argument('--export-conventional', action='store_true', 
+                               help='Export conventional structure as CIF file')
+    
+    # Get a material from Materials Project by ID
+    get_material_parser = subparsers.add_parser('get-material', help='Get a material from Materials Project by ID and export as CIF')
+    get_material_parser.add_argument('material_id', help='Materials Project ID (e.g., mp-149)')
+    get_material_parser.add_argument('--output', '-o', help='Output file path (default: material_id.cif)')
+    get_material_parser.add_argument('--api-key', help='Materials Project API key (optional, will use environment variable if not provided)')
+    get_material_parser.add_argument('--conventional', action='store_true', help='Export conventional cell instead of primitive cell')
+    get_material_parser.add_argument('--no-analysis', action='store_true', help='Skip structure analysis information')
     
     # Visualize clusters
     vis_parser = subparsers.add_parser('visualize', help='Visualize clusters')
@@ -73,6 +85,12 @@ def get_parser():
     vis_parser.add_argument('--output', '-o', help='Output file prefix')
     vis_parser.add_argument('--show', action='store_true', help='Show visualization (requires GUI)')
     vis_parser.add_argument('--dpi', type=int, default=300, help='DPI for saved images (default: 300)')
+    vis_parser.add_argument('--cluster-index', '-i', type=int, help='Index of specific cluster to visualize (0-based)')
+    vis_parser.add_argument('--rotation', type=str, default="45x,30y,0z", 
+                           help='Rotation parameters for visualization (default: "45x,30y,0z")')
+    vis_parser.add_argument('--type', choices=['cluster', 'graph', 'lattice', 'all'], default='cluster',
+                          help='Type of visualization: cluster (default), graph (connectivity), lattice (conventional cell), or all')
+    vis_parser.add_argument('--3d', dest='use_3d', action='store_true', help='Use 3D visualization for graph (only applies to graph type)')
     
     # Batch process multiple structures
     batch_parser = subparsers.add_parser('batch', help='Process multiple structure files')
@@ -86,6 +104,9 @@ def get_parser():
     summary_parser = subparsers.add_parser('summary', help='Generate summary statistics')
     summary_parser.add_argument('input_file', help='JSON or CSV file with cluster data')
     summary_parser.add_argument('--output', '-o', help='Output file for summary')
+    summary_parser.add_argument('--retrieve-missing', action='store_true', 
+                              help='Retrieve missing properties (e.g., total_magnetization) from Materials Project')
+    summary_parser.add_argument('--api-key', help='Materials Project API key (used if retrieve-missing is enabled)')
     
     # Rank clusters based on various criteria
     rank_parser = subparsers.add_parser('rank', help='Rank clusters based on geometry, symmetry, and stability')
@@ -151,6 +172,14 @@ def find_command(args):
         # Analyze clusters
         analyzed_clusters = analyze_clusters(clusters, structure.lattice) if clusters else []
         
+        # Extract material_id from filename if it looks like an MP ID
+        filename_base = os.path.basename(args.structure_file)
+        material_id = os.path.splitext(filename_base)[0]
+        # If the filename looks like an MP id (mp-XXXXX), use it directly
+        if not re.match(r'mp-\d+', material_id):
+            # Otherwise, use the filename as a generic ID
+            material_id = filename_base
+        
         # Convert analyzed clusters to JSON-serializable format
         json_clusters = []
         for cluster in analyzed_clusters:
@@ -165,10 +194,12 @@ def find_command(args):
         
         # Prepare output data
         result = {
+            "material_id": material_id,
             "formula": structure.composition.reduced_formula,
             "structure": structure.as_dict(),
             "clusters": json_clusters,
             "num_clusters": len(analyzed_clusters)
+            # No default total_magnetization
         }
         
         # Determine output path
@@ -184,11 +215,12 @@ def find_command(args):
         
         if args.format in ['csv', 'both']:
             df = cluster_compounds_dataframe([{
-                "material_id": os.path.basename(args.structure_file),
+                "material_id": material_id,
                 "formula": result["formula"],
                 "structure": structure,  # Pass the Structure object directly
                 "clusters": analyzed_clusters,  # Pass the original clusters with PeriodicSite objects
                 "num_clusters": result["num_clusters"]
+                # No default total_magnetization
             }])
             if df is not None:  # Check if DataFrame was created successfully
                 csv_file = f"{output_base}_clusters.csv"
@@ -285,6 +317,12 @@ def analyze_command(args):
                 }, f, indent=2)
             print(f"Saved analysis to {json_file}")
         
+        # Export conventional structure if requested
+        if args.export_conventional:
+            conventional_cif_file = f"{output_prefix}_conventional.cif"
+            export_structure_to_cif(conventional_structure, conventional_cif_file)
+            print(f"Saved conventional structure to {conventional_cif_file}")
+        
         # Print summary
         print(f"\nStructure Analysis for {data['formula']}")
         print(f"Space Group: {space_group_symbol}")
@@ -340,21 +378,117 @@ def visualize_command(args):
         # Determine output prefix
         output_prefix = args.output or os.path.splitext(os.path.basename(args.json_file))[0]
         
-        # Create visualization
-        try:
-            import matplotlib.pyplot as plt
-            fig = visualize_clusters_in_compound(structure, clusters)
-            
-            if args.show:
-                plt.show()
-            
-            plt.savefig(f"{output_prefix}_clusters.png", dpi=args.dpi)
-            print(f"Saved cluster visualization to {output_prefix}_clusters.png")
-        except Exception as e:
-            print(f"Error creating visualization: {e}")
+        # Import needed visualization modules
+        import matplotlib.pyplot as plt
+        from .visualization.visualize import visualize_cluster_lattice
+        
+        # Check cluster index bounds
+        if args.cluster_index is not None and (args.cluster_index < 0 or args.cluster_index >= len(clusters)):
+            print(f"Warning: Cluster index {args.cluster_index} is out of bounds (0-{len(clusters)-1}). Using default.")
+            args.cluster_index = None
+        
+        # Validate visualization type choice
+        vis_types = []
+        if args.type == 'all':
+            vis_types = ['cluster', 'graph', 'lattice']
+        else:
+            vis_types = [args.type]
+        
+        # Create the requested visualizations
+        for vis_type in vis_types:
+            try:
+                if vis_type == 'cluster':
+                    # Cluster visualization
+                    fig = visualize_clusters_in_compound(
+                        structure, 
+                        clusters, 
+                        cluster_index=args.cluster_index, 
+                        rotation=args.rotation
+                    )
+                    if fig:
+                        cluster_idx = args.cluster_index if args.cluster_index is not None else 0
+                        png_file = f"{output_prefix}_cluster_{cluster_idx+1}.png"
+                        fig.savefig(png_file, dpi=args.dpi)
+                        print(f"Saved cluster visualization to {png_file}")
+                        
+                        if args.show:
+                            plt.figure(fig.number)
+                            plt.show(block=False)
+                    
+                elif vis_type == 'graph':
+                    # Graph visualization - need to reconstruct connectivity
+                    # Get transition metal elements from clusters
+                    tm_elements = set()
+                    for cluster in clusters:
+                        for site in cluster["sites"]:
+                            if hasattr(site, 'specie'):
+                                tm_elements.add(site.specie.symbol)
+                    
+                    # Create connectivity matrix
+                    matrix, indices = create_connectivity_matrix(structure, list(tm_elements))
+                    
+                    # Create graph
+                    graph = structure_to_graph(matrix)
+                    
+                    # Create visualization
+                    fig = visualize_graph(
+                        graph, 
+                        structure, 
+                        indices, 
+                        material_id=data.get("material_id", ""), 
+                        formula=data.get("formula", ""),
+                        use_3d=args.use_3d
+                    )
+                    
+                    # Save graph visualization
+                    dim = "3d" if args.use_3d else "2d"
+                    png_file = f"{output_prefix}_graph_{dim}.png"
+                    fig.savefig(png_file, dpi=args.dpi)
+                    print(f"Saved graph visualization to {png_file}")
+                    
+                    if args.show:
+                        plt.figure(fig.number)
+                        plt.show(block=False)
+                
+                elif vis_type == 'lattice':
+                    # Lattice visualization - first need to get or create conventional structure
+                    # Check if we already have a conventional structure from previous analysis
+                    conv_structure_file = f"{output_prefix}_conventional.cif"
+                    try:
+                        if os.path.exists(conv_structure_file):
+                            conventional_structure = Structure.from_file(conv_structure_file)
+                            print(f"Using existing conventional structure from {conv_structure_file}")
+                        else:
+                            # Generate conventional structure with clusters
+                            conventional_structure, _, _ = generate_lattice_with_clusters(structure, clusters)
+                            print("Generated conventional structure with clusters")
+                        
+                        # Create lattice visualization
+                        fig = visualize_cluster_lattice(conventional_structure, rot=args.rotation)
+                        
+                        # Save lattice visualization
+                        png_file = f"{output_prefix}_lattice.png"
+                        fig.savefig(png_file, dpi=args.dpi)
+                        print(f"Saved lattice visualization to {png_file}")
+                        
+                        if args.show:
+                            plt.figure(fig.number)
+                            plt.show(block=False)
+                    
+                    except Exception as e:
+                        print(f"Warning: Could not create lattice visualization: {e}")
+                        
+            except Exception as e:
+                print(f"Error creating {vis_type} visualization: {e}")
+        
+        # Show all figures at once if requested and not already shown
+        if args.show:
+            plt.show()
             
     except Exception as e:
         print(f"Error in visualize command: {str(e)}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
@@ -425,8 +559,70 @@ def summary_command(args):
             df = import_csv_data(args.input_file)
             compounds = df.to_dict('records')
         
-        # Generate summary
-        summary = cluster_summary_stat(compounds, compounds)
+        # Process compounds to ensure they have required fields
+        processed_compounds = []
+        for compound in compounds:
+            # Make a copy to avoid modifying the original
+            processed = dict(compound)
+            
+            # Ensure material_id is present
+            if "material_id" not in processed:
+                # Try to get it from the filename if JSON
+                if args.input_file.lower().endswith('.json'):
+                    base_name = os.path.basename(args.input_file)
+                    # Check if filename follows mp-XXXXX pattern
+                    mp_match = re.search(r'(mp-\d+)', base_name)
+                    if mp_match:
+                        processed["material_id"] = mp_match.group(1)
+                    else:
+                        # Use the filename without extension as a fallback
+                        processed["material_id"] = os.path.splitext(base_name)[0]
+                else:
+                    # Generate a generic ID
+                    processed["material_id"] = f"material_{compounds.index(compound) + 1}"
+            
+            # Handle missing total_magnetization based on retrieve-missing flag
+            if "total_magnetization" not in processed:
+                if args.retrieve_missing:
+                    try:
+                        print(f"Retrieving total_magnetization for {processed['material_id']}...")
+                        # This is the key line that needed fixing - make sure we call get_mp_property
+                        # when retrieve_missing is True, regardless of material ID format
+                        processed["total_magnetization"] = get_mp_property(
+                            processed["material_id"], 
+                            "total_magnetization", 
+                            args.api_key
+                        )
+                        print(f"Retrieved total_magnetization: {processed['total_magnetization']}")
+                    except Exception as e:
+                        print(f"Warning: Could not retrieve total_magnetization for {processed['material_id']}: {e}")
+                        # Skip this compound if we can't retrieve the required property
+                        continue
+                else:
+                    # Skip this compound if missing required property and not retrieving
+                    print(f"Warning: Missing total_magnetization for {processed['material_id']} and retrieve-missing not enabled")
+                    continue
+            
+            # Process clusters if they exist but need conversion
+            if "clusters" in processed and isinstance(processed["clusters"], list):
+                # Ensure clusters have all required fields
+                for cluster in processed["clusters"]:
+                    if isinstance(cluster, dict):
+                        if "size" not in cluster:
+                            # Try to determine size from sites if available
+                            if "sites" in cluster and isinstance(cluster["sites"], list):
+                                cluster["size"] = len(cluster["sites"])
+                            else:
+                                cluster["size"] = 0
+            
+            processed_compounds.append(processed)
+        
+        if not processed_compounds:
+            print("Warning: No valid compounds to process after handling missing properties")
+            return
+        
+        # Generate summary using the processed compounds
+        summary = cluster_summary_stat(processed_compounds, processed_compounds)
         
         # Output summary
         if args.output:
@@ -438,6 +634,8 @@ def summary_command(args):
             
     except Exception as e:
         print(f"Error in summary command: {str(e)}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
@@ -539,6 +737,71 @@ def rank_command(args):
         sys.exit(1)
 
 
+def get_material_command(args):
+    """Execute the get-material command to retrieve a structure from Materials Project."""
+    try:
+        print(f"\nRetrieving material {args.material_id} from Materials Project...")
+        
+        # Initialize MPRester with the provided API key or from environment variable
+        with MPRester(args.api_key) as mpr:
+            try:
+                # Get the structure from Materials Project
+                structure = mpr.get_structure_by_material_id(args.material_id)
+                
+                # Convert to conventional cell if requested
+                if args.conventional:
+                    analyzer = SpacegroupAnalyzer(structure)
+                    structure = analyzer.get_conventional_standard_structure()
+                    print(f"Retrieved conventional structure for {args.material_id}")
+                else:
+                    print(f"Retrieved primitive structure for {args.material_id}")
+                
+                # Determine output path
+                output_path = args.output or f"{args.material_id}.cif"
+                
+                # Export structure to CIF
+                export_structure_to_cif(structure, output_path)
+                print(f"Structure exported to {output_path}")
+                
+                # Display structure analysis information
+                if not args.no_analysis:
+                    analyzer = SpacegroupAnalyzer(structure)
+                    space_group = analyzer.get_space_group_symbol()
+                    point_group = analyzer.get_point_group_symbol()
+                    formula = structure.composition.reduced_formula
+                    
+                    print("\nStructure Information:")
+                    print(f"Formula: {formula}")
+                    print(f"Space Group: {space_group}")
+                    print(f"Point Group: {point_group}")
+                    print(f"Number of Sites: {len(structure)}")
+                    print(f"Elements: {', '.join(sorted([str(e) for e in structure.composition.elements]))}")
+                    
+                    # Try to get additional properties if available
+                    try:
+                        energy_above_hull = get_mp_property(args.material_id, 'energy_above_hull', args.api_key)
+                        formation_energy = get_mp_property(args.material_id, 'formation_energy_per_atom', args.api_key)
+                        band_gap = get_mp_property(args.material_id, 'band_gap', args.api_key)
+                        
+                        print("\nMaterial Properties:")
+                        print(f"Energy Above Hull: {energy_above_hull:.4f} eV/atom")
+                        print(f"Formation Energy: {formation_energy:.4f} eV/atom")
+                        print(f"Band Gap: {band_gap:.4f} eV")
+                    except Exception as e:
+                        # Not all properties may be available, so we'll just ignore any errors
+                        pass
+            
+            except Exception as e:
+                print(f"Error retrieving structure: {str(e)}", file=sys.stderr)
+                print("Make sure you have a valid Materials Project API key set as MAPI_KEY environment variable "
+                      "or provided through the --api-key argument.", file=sys.stderr)
+                sys.exit(1)
+                
+    except Exception as e:
+        print(f"Error in get_material command: {str(e)}", file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     """Main entry point for the command-line interface."""
     parser = get_parser()
@@ -562,6 +825,8 @@ def main():
             summary_command(args)
         elif args.command == 'rank':
             rank_command(args)
+        elif args.command == 'get-material':
+            get_material_command(args)
         else:
             parser.print_help()
             sys.exit(1)

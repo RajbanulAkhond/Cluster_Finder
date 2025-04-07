@@ -76,40 +76,16 @@ def cluster_summary_stat(compounds_with_clusters, entries):
         
     Returns:
         str: A formatted multi-line string containing the analysis summary
-        
-    Raises:
-        TypeError: If input parameters are None or not lists
-        KeyError: If compound dictionaries are missing required fields
-            (material_id, formula, total_magnetization, clusters)
-    
-    Example:
-        >>> compounds = [{"material_id": "mp-123", "formula": "Fe2O3", ...}]
-        >>> entries = [entry1, entry2, entry3]
-        >>> summary = cluster_summary_stat(compounds, entries)
-        >>> print(summary)
-        Summary of Cluster Analysis
-        -------------------------
-        Total Compounds Analyzed: 3
-        Compounds with Clusters: 1 (33.3%)
-        ...
-    
-    Notes:
-        - The function assumes that cluster dictionaries contain 'sites',
-          'size', and 'average_distance' keys
-        - Empty or missing clusters lists are handled gracefully
-        - The summary includes blank lines between compounds for readability
     """
     if compounds_with_clusters is None or entries is None:
         raise TypeError("Input parameters cannot be None")
     
     if not isinstance(compounds_with_clusters, list) or not isinstance(entries, list):
         raise TypeError("Input parameters must be lists")
-
     if not entries:
         summary = ["Total Compounds Analyzed: 0"]
         summary.append("Compounds with Clusters: 0")
         return "\n".join(summary)
-
     total_compounds = len(entries)
     compounds_with_clusters_count = sum(1 for compound in compounds_with_clusters if compound.get('clusters', []))
     
@@ -141,13 +117,86 @@ def cluster_summary_stat(compounds_with_clusters, entries):
                     summary.append(f"Average Distance: {cluster['average_distance']:.2f} Å")
                     
                     summary.append("Sites:")
-                    for site in cluster['sites']:
-                        summary.append(f"Element: {site.specie.symbol}, Position: {site.frac_coords}")
+                    for site in cluster.get('sites', []):
+                        # Extract element and position from site object or dictionary
+                        element = "Unknown"
+                        position = "Unknown"
+                        
+                        # Case 1: pymatgen Site object
+                        if hasattr(site, 'specie') and hasattr(site.specie, 'symbol'):
+                            element = site.specie.symbol
+                            position = site.frac_coords
+                            
+                        # Case 2: Dictionary representation of a site
+                        elif isinstance(site, dict):
+                            # Try to extract element information
+                            if "species" in site:
+                                species_data = site["species"]
+                                
+                                # Handle various formats for species data
+                                if isinstance(species_data, list) and len(species_data) > 0:
+                                    if isinstance(species_data[0], dict):
+                                        if "element" in species_data[0]:
+                                            element_data = species_data[0]["element"]
+                                            if isinstance(element_data, dict):
+                                                element = next(iter(element_data.keys()), "Unknown")
+                                            else:
+                                                element = str(element_data)
+                                    else:
+                                        element = str(species_data[0])
+                                elif isinstance(species_data, dict) and "element" in species_data:
+                                    element_data = species_data["element"]
+                                    if isinstance(element_data, dict):
+                                        element = next(iter(element_data.keys()), "Unknown")
+                                    else:
+                                        element = str(element_data)
+                                else:
+                                    element = str(species_data)
+                            elif "element" in site:
+                                element = site["element"]
+                            elif "elements" in cluster and isinstance(cluster["elements"], list):
+                                try:
+                                    idx = cluster['sites'].index(site)
+                                    if idx < len(cluster["elements"]):
+                                        element = cluster["elements"][idx]
+                                except (ValueError, IndexError):
+                                    pass
+                            
+                            # Try to extract position information
+                            if "frac_coords" in site:
+                                position = site["frac_coords"]
+                            elif "xyz" in site:
+                                position = site["xyz"]
+                            elif "coords" in site:
+                                position = site["coords"]
+                            # Check for properties dictionary structure (common in MP API)
+                            elif "properties" in site and "frac_coords" in site["properties"]:
+                                position = site["properties"]["frac_coords"]
+                        
+                        # Final attempt to find position in alternative locations
+                        if position == "Unknown" and isinstance(site, dict):
+                            # Some MP API formats nest coordinates differently
+                            for key in ["abc", "fractional_coords", "position", "pos"]:
+                                if key in site:
+                                    position = site[key]
+                                    break
+                                    
+                            # For JSON format where we might have "sites" as serialized dicts
+                            # Check if there's a "coords" key at the top level
+                            if "coords" in cluster:
+                                try:
+                                    idx = cluster['sites'].index(site)
+                                    if idx < len(cluster["coords"]):
+                                        position = cluster["coords"][idx]
+                                except (ValueError, IndexError):
+                                    pass
+                        
+                        summary.append(f"Element: {element}, Position: {position}")
             else:
                 summary.append("No clusters found in this structure")
             
             summary.append("")  # Add blank line between compounds
         except KeyError as e:
-            raise KeyError(f"Missing required field in compound data: {str(e)}")
+            summary.append(f"Error processing compound: {str(e)}")
     
     return "\n".join(summary)

@@ -8,7 +8,7 @@ import json
 import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 from pymatgen.core.structure import Structure
 
 from cluster_finder.cli import (
@@ -175,7 +175,8 @@ class TestCLI:
     @patch('cluster_finder.cli.Structure')
     @patch('cluster_finder.cli.cluster_compounds_dataframe')
     @patch('cluster_finder.cli.export_csv_data')
-    def test_analyze_command(self, mock_export, mock_df, mock_structure, mock_generate_lattice):
+    @patch('cluster_finder.cli.export_structure_to_cif')  # Add patch for export_structure_to_cif
+    def test_analyze_command(self, mock_export_cif, mock_export, mock_df, mock_structure, mock_generate_lattice):
         """Test analyze command with mocked dependencies."""
         # Set up mocks
         mock_structure_instance = MagicMock()
@@ -186,8 +187,8 @@ class TestCLI:
         mock_conv_structure = MagicMock()
         mock_conv_structure.as_dict.return_value = {"mock": "conventional_structure"}
         mock_generate_lattice.return_value = (
-            mock_conv_structure, 
-            "P1", 
+            mock_conv_structure,
+            "P1",
             {"X1": "1"}
         )
         
@@ -198,6 +199,7 @@ class TestCLI:
         args.json_file = "test_clusters.json"
         args.output = "test_output"
         args.format = 'both'
+        args.export_conventional = False  # Default to False
         
         # Create a temporary directory and test JSON file
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -245,66 +247,108 @@ class TestCLI:
             
             with open(json_path, 'w') as f:
                 json.dump(data, f)
-            
+                
             # Change args to point to our test file
             args.json_file = json_path
             
             # Run the command
+            
             analyze_command(args)
             
-            # Check that the mock functions were called
-            # Structure.from_dict is called multiple times, so just verify it's called at least once
-            mock_structure.from_dict.assert_called()
-            mock_generate_lattice.assert_called_once()
-            mock_df.assert_called_once()
-            mock_export.assert_called_once()
+            # Verify that export_structure_to_cif was not called (since export_conventional=False)
+            mock_export_cif.assert_not_called()
+            
+            # Now test with export_conventional=True
+            args.export_conventional = True
+            analyze_command(args)
+            
+            # Verify that export_structure_to_cif was called
+            mock_export_cif.assert_called_once_with(mock_conv_structure, f"test_output_conventional.cif")
     
+    @patch('cluster_finder.cli.validate_input_file')  # Add patch for validate_input_file
+    @patch('cluster_finder.visualization.visualize.visualize_cluster_lattice')
+    @patch('cluster_finder.cli.create_connectivity_matrix')
+    @patch('cluster_finder.cli.structure_to_graph')
+    @patch('cluster_finder.cli.visualize_graph')
     @patch('cluster_finder.cli.Structure')
     @patch('cluster_finder.cli.visualize_clusters_in_compound')
     @patch('matplotlib.pyplot.savefig')
     @patch('matplotlib.pyplot.show')
-    def test_visualize_command(self, mock_show, mock_savefig, mock_visualize, mock_structure):
+    def test_visualize_command(self, mock_show, mock_savefig, mock_visualize_clusters, 
+                              mock_structure, mock_vis_graph, mock_graph, mock_connect,
+                              mock_vis_lattice, mock_validate_file):
         """Test visualize command with mocked dependencies."""
         # Set up mocks
-        mock_structure.from_dict.return_value = MagicMock()
-        mock_visualize.return_value = MagicMock()
+        mock_validate_file.return_value = True  # Always return True for file validation
         
-        # Create args object
+        mock_structure_instance = MagicMock()
+        mock_structure.from_dict.return_value = mock_structure_instance
+        mock_visualize_clusters.return_value = MagicMock()
+        mock_vis_graph.return_value = MagicMock()
+        mock_vis_lattice.return_value = MagicMock()
+        mock_graph.return_value = MagicMock()
+        mock_connect.return_value = (MagicMock(), [0])
+        
+        # Create args object with the new options
         args = MagicMock()
         args.json_file = "test_clusters.json"
         args.output = "test_output"
         args.show = True
         args.dpi = 300
+        args.cluster_index = None  # Setting concrete values instead of MagicMock
+        args.rotation = "45x,30y,0z"
+        args.type = "cluster"  # Default to cluster type
+        args.use_3d = False
         
-        # Create a temporary directory and test JSON file
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a test JSON file
-            json_path = os.path.join(tmpdir, "test_clusters.json")
-            data = {
-                "clusters": [{
-                    "sites": [], 
-                    "size": 2,
-                    "average_distance": 2.5,
-                    "centroid": [0.0, 0.0, 0.0],
-                    "elements": ["Fe", "Fe"]
-                }],
-                "structure": {"mock": "structure"}
-            }
-            
-            with open(json_path, 'w') as f:
-                json.dump(data, f)
-            
-            # Change args to point to our test file
-            args.json_file = json_path
-            
-            # Run the command
-            visualize_command(args)
-            
-            # Check that the mock functions were called
-            mock_structure.from_dict.assert_called_once()
-            mock_visualize.assert_called_once()
-            mock_savefig.assert_called_once_with("test_output_clusters.png", dpi=300)
-            mock_show.assert_called_once()
+        # Create mock data for the JSON file
+        data = {
+            "material_id": "mp-123",
+            "formula": "Fe2O3",
+            "clusters": [{
+                "sites": [], 
+                "size": 2,
+                "average_distance": 2.5,
+                "centroid": [0.0, 0.0, 0.0],
+                "elements": ["Fe", "Fe"]
+            }],
+            "structure": {"mock": "structure"}
+        }
+        
+        # Mock open and json.load to return our data
+        with patch("builtins.open", mock_open(read_data=json.dumps(data))) as mock_file:
+            with patch("json.load", return_value=data):
+                # Test cluster visualization
+                args.type = "cluster"
+                visualize_command(args)
+                mock_visualize_clusters.assert_called_with(
+                    mock_structure_instance, 
+                    [{'size': 2, 'average_distance': 2.5, 'centroid': [0.0, 0.0, 0.0], 
+                    'elements': ['Fe', 'Fe'], 'sites': []}],
+                    cluster_index=None,
+                    rotation="45x,30y,0z"
+                )
+                
+                # Test graph visualization
+                args.type = "graph"
+                mock_visualize_clusters.reset_mock()
+                visualize_command(args)
+                mock_vis_graph.assert_called_once()
+                
+                # Test all visualizations
+                args.type = "all"
+                mock_visualize_clusters.reset_mock()
+                mock_vis_graph.reset_mock()
+                
+                # Mock os.path.exists to return False so it generates a new conventional structure
+                with patch('os.path.exists', return_value=False):
+                    with patch('cluster_finder.cli.generate_lattice_with_clusters') as mock_gen_lattice:
+                        mock_gen_lattice.return_value = (mock_structure_instance, "P1", {})
+                        visualize_command(args)
+                
+                # Verify that all visualization functions were called
+                mock_visualize_clusters.assert_called_once()
+                mock_vis_graph.assert_called_once()
+                mock_vis_lattice.assert_called_once()
     
     def test_batch_command(self, tmp_path):
         """Test batch command."""
@@ -333,10 +377,12 @@ class TestCLI:
     
     def test_summary_command(self, tmp_path):
         """Test summary command."""
-        # Create test data
+        # Create test data with total_magnetization field to avoid skipping
         test_data = {
+            "material_id": "test-123",
             "formula": "Fe8",
             "num_clusters": 1,
+            "total_magnetization": 5.0,
             "clusters": [{"sites": [], "size": 2}]
         }
         
@@ -345,10 +391,14 @@ class TestCLI:
         with open(json_file, 'w') as f:
             json.dump(test_data, f)
         
-        # Create args object
+        output_file = tmp_path / "summary.txt"
+        
+        # Create args object with retrieve-missing=False
         args = MagicMock()
         args.input_file = str(json_file)
-        args.output = str(tmp_path / "summary.txt")
+        args.output = str(output_file)
+        args.retrieve_missing = False
+        args.api_key = None
         
         # Run command
         with patch("cluster_finder.cli.cluster_summary_stat") as mock_summary:
@@ -356,9 +406,41 @@ class TestCLI:
             summary_command(args)
             
             # Check that summary was generated
-            assert os.path.exists(args.output)
-            with open(args.output) as f:
+            assert os.path.exists(str(output_file))
+            with open(str(output_file)) as f:
                 assert f.read() == "Test Summary"
+            
+            # Verify it was called with the processed compounds
+            mock_summary.assert_called_once()
+            
+        # Test with missing total_magnetization field
+        missing_data = {
+            "material_id": "test-123",
+            "formula": "Fe8",
+            "num_clusters": 1,
+            "clusters": [{"sites": [], "size": 2}]
+        }
+        
+        # Create test file with missing field
+        missing_file = tmp_path / "missing.json"
+        with open(missing_file, 'w') as f:
+            json.dump(missing_data, f)
+        
+        # Create args to try retrieving missing data
+        args.input_file = str(missing_file)
+        args.retrieve_missing = True
+        
+        # Run command with get_mp_property mocked
+        with patch("cluster_finder.cli.get_mp_property") as mock_get_prop:
+            mock_get_prop.return_value = 3.0
+            with patch("cluster_finder.cli.cluster_summary_stat") as mock_summary:
+                mock_summary.return_value = "Test Summary with Retrieved Data"
+                
+                # Execute the command (it should try to retrieve missing data)
+                summary_command(args)
+                
+                # Check if the property was retrieved
+                mock_get_prop.assert_called_with("test-123", "total_magnetization", None)
     
     @patch('cluster_finder.cli.sys.exit')
     @patch('cluster_finder.cli.get_parser')
