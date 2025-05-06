@@ -9,7 +9,7 @@ import pandas as pd
 import ast
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from ..core.structure import calculate_centroid
-from ..utils.helpers import get_mp_property
+from ..utils.helpers import get_mp_property, get_mp_properties_batch
 
 # Define mappings for symmetry analysis
 # Point group order mapping (simplified for common point groups)
@@ -127,7 +127,7 @@ def classify_dimensionality(supercell):
     Parameters:
         supercell (Structure): A pymatgen.core.structure.Structure object whose
                                sites are the centroid points of clusters.
-
+    
     Returns:
         tuple: (cluster_type, normalized_singular_values)
                where cluster_type is one of "0D", "1D", "2D", or "3D",
@@ -137,26 +137,27 @@ def classify_dimensionality(supercell):
       - If only one singular value is significant, the centroids are nearly collinear (0D or 1D).
       - If two are significant, they lie mostly in a plane (1D or 2D).
       - If all three are significant, then the network is volumetric (3D).
+    
     Thresholds (e.g. 0.1) and ratios (e.g. 0.5) are used to distinguish these cases.
     """
     # Extract coordinates for all sites in the supercell
     coords = np.array([site.coords for site in supercell.sites])
-
+    
     # Center the coordinates (subtract the mean)
     centered = coords - coords.mean(axis=0)
-
+    
     # Perform SVD (equivalent to PCA for centered data)
     U, s, Vt = np.linalg.svd(centered, full_matrices=False)
-
+    
     # Normalize singular values to range 0-1 (avoid division by zero)
     if s.max() != 0:
         s_normalized = s / s.max()
     else:
         s_normalized = s
-
+    
     # Set a threshold to decide if a singular value is significant
     threshold = 0.2
-
+    
     # Classify based on normalized singular values.
     # Here we assume that we always have three singular values for a 3D structure.
     if len(s_normalized) >= 3:
@@ -203,6 +204,8 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
     Returns:
         pandas.DataFrame: Sorted DataFrame with additional ranking columns and custom properties
     """
+    print(f"Starting rank_clusters function with {len(data_source)} initial entries")
+    
     if isinstance(data_source, str):
         df = pd.read_csv(data_source)
     elif isinstance(data_source, pd.DataFrame):
@@ -212,21 +215,22 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
 
     # Make a copy of the original DataFrame to avoid modifying it directly
     df_filtered = df.copy()
+    print(f"Initial dataframe has {len(df_filtered)} rows")
     
     # Check if necessary columns exist, if not add them with default values
     if "space_group" not in df_filtered.columns:
         print("Warning: 'space_group' column not found. Using default value.")
         df_filtered["space_group"] = "P1"  # Default to lowest symmetry
     
-    # Process point_groups column - extract the highest order point group
+    # Vectorized string-to-dict conversion for point_groups column
     if "point_groups" in df_filtered.columns:
         try:
-            # Extract point group dictionary from each row
+            # Extract point group dictionary from each row - vectorized
             df_filtered["point_groups_dict"] = df_filtered["point_groups"].apply(
-                lambda x: ast.literal_eval(x) if isinstance(x, str) else {}
+                lambda x: ast.literal_eval(x) if isinstance(x, str) else (x or {})
             )
             
-            # Find the highest-order point group for each row
+            # Vectorized extraction of highest order point group
             df_filtered["max_point_group_order"] = df_filtered["point_groups_dict"].apply(get_highest_point_group_order)
             
             # For reference, also extract the point group with highest order
@@ -235,7 +239,8 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
                     return "C1"
                 orders = {pg: get_point_group_order(pg) for pg in pg_dict.values()}
                 return max(orders.items(), key=lambda x: x[1])[0] if orders else "C1"
-                
+            
+            # Still using apply for this complex function, but could be optimized further
             df_filtered["highest_point_group"] = df_filtered["point_groups_dict"].apply(get_highest_order_point_group)
             
         except (ValueError, SyntaxError, AttributeError) as e:
@@ -245,7 +250,11 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
     elif "point_group" in df_filtered.columns:
         print("Using 'point_group' column for ranking...")
         df_filtered["highest_point_group"] = df_filtered["point_group"]
-        df_filtered["max_point_group_order"] = df_filtered["point_group"].apply(get_point_group_order)
+        
+        # Vectorized mapping using Series.map
+        # Create a Series mapping from point group symbols to orders
+        point_group_order_series = pd.Series(point_group_order_mapping)
+        df_filtered["max_point_group_order"] = df_filtered["point_group"].map(point_group_order_series).fillna(0)
     else:
         print("Warning: Neither 'point_groups' nor 'point_group' column found. Using default value.")
         df_filtered["highest_point_group"] = "C1"
@@ -253,28 +262,75 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
     
     # Ensure we have the necessary columns for filtering
     if "cluster_sizes" in df_filtered.columns:
-        # Filter out rows where symmetry was not determined or cluster size > 6
-        if "space_group" in df_filtered.columns:
-            df_filtered = df_filtered[
-                (df_filtered["space_group"] != "Symmetry Not Determined") &
-                (df_filtered["cluster_sizes"].apply(
-                    lambda x: all(int(size) <= 6 for size in (ast.literal_eval(x) if isinstance(x, str) else x))
-                ))
-            ]
+        # Count materials before filtering
+        num_before = len(df_filtered)
+        
+        # Convert string cluster_sizes to list if needed
+        if df_filtered["cluster_sizes"].dtype == 'object':
+            df_filtered["cluster_sizes_list"] = df_filtered["cluster_sizes"].apply(
+                lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+            )
         else:
-            df_filtered = df_filtered[
-                df_filtered["cluster_sizes"].apply(
-                    lambda x: all(int(size) <= 6 for size in (ast.literal_eval(x) if isinstance(x, str) else x))
-                )
-            ]
+            df_filtered["cluster_sizes_list"] = df_filtered["cluster_sizes"]
+        
+        # Vectorized check for large clusters
+        def has_large_clusters(clusters):
+            if not clusters:
+                return False
+            return not all(int(size) <= 8 for size in clusters)
+        
+        # Create filtering mask
+        if "space_group" in df_filtered.columns:
+            # Check which materials have "Symmetry Not Determined" space group
+            symm_not_determined = df_filtered[df_filtered["space_group"] == "Symmetry Not Determined"]
+            if not symm_not_determined.empty:
+                print(f"Dropping {len(symm_not_determined)} materials with 'Symmetry Not Determined' space group:")
+                for idx, row in symm_not_determined.iterrows():
+                    print(f"  - {row['material_id']} ({row.get('formula', 'No formula')})")
+            
+            # Check which materials have cluster size > 8
+            large_clusters_mask = df_filtered["cluster_sizes_list"].apply(has_large_clusters)
+            large_clusters = df_filtered[large_clusters_mask]
+            
+            if not large_clusters.empty:
+                print(f"Dropping {len(large_clusters)} materials with cluster size > 8:")
+                for idx, row in large_clusters.iterrows():
+                    clusters = row["cluster_sizes_list"]
+                    print(f"  - {row['material_id']} ({row.get('formula', 'No formula')}) with cluster sizes: {clusters}")
+            
+            # Now apply the filter with boolean indexing (vectorized)
+            space_group_mask = (df_filtered["space_group"] != "Symmetry Not Determined")
+            size_mask = ~large_clusters_mask
+            df_filtered = df_filtered[space_group_mask & size_mask]
+        else:
+            # Only filter by cluster size
+            large_clusters_mask = df_filtered["cluster_sizes_list"].apply(has_large_clusters)
+            large_clusters = df_filtered[large_clusters_mask]
+            
+            if not large_clusters.empty:
+                print(f"Dropping {len(large_clusters)} materials with cluster size > 8:")
+                for idx, row in large_clusters.iterrows():
+                    clusters = row["cluster_sizes_list"]
+                    print(f"  - {row['material_id']} ({row.get('formula', 'No formula')}) with cluster sizes: {clusters}")
+            
+            # Apply filter with boolean indexing
+            df_filtered = df_filtered[~large_clusters_mask]
+        
+        # Report how many materials were filtered out
+        num_after = len(df_filtered)
+        if num_before > num_after:
+            print(f"Filtered out {num_before - num_after} materials due to symmetry or cluster size criteria")
+            print(f"Remaining materials: {num_after}")
 
     # Process average_distance column
     if "average_distance" in df_filtered.columns:
-        # 'average_distance' column is stored as a list in string form; convert it.
-        df_filtered["average_distance"] = df_filtered["average_distance"].apply(
-            lambda x: ast.literal_eval(x) if isinstance(x, str) else x
-        )
-        # Create a new column for the minimum average distance.
+        # Convert string to list if needed - vectorized
+        if df_filtered["average_distance"].dtype == 'object':
+            df_filtered["average_distance"] = df_filtered["average_distance"].apply(
+                lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+            )
+        
+        # Vectorized minimum calculation
         df_filtered["min_avg_distance"] = df_filtered["average_distance"].apply(
             lambda x: min(x) if isinstance(x, list) and len(x) > 0 else None
         )
@@ -282,8 +338,9 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
         print("Warning: 'average_distance' column not found. Skipping distance-based ranking.")
         df_filtered["min_avg_distance"] = 0  # Default to 0 for ranking
 
-    # Calculate space group order
-    df_filtered["space_group_order"] = df_filtered["space_group"].apply(get_space_group_order)
+    # Calculate space group order using vectorized map
+    space_group_order_series = pd.Series(space_group_number_mapping)
+    df_filtered["space_group_order"] = df_filtered["space_group"].map(space_group_order_series).fillna(0)
     
     # Determine material_id column - do this early so it's available for all API calls
     material_id_col = None
@@ -294,20 +351,49 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
   
     # Add custom properties if provided
     if custom_props and material_id_col:
+        # Get all unique material IDs from the DataFrame - vectorized
+        material_ids = df_filtered[material_id_col].dropna().unique().tolist()
+        print(f"Retrieving properties for {len(material_ids)} unique materials")
+        
+        # Filter out any custom properties that are already in the DataFrame
+        props_to_fetch = []
         for prop in custom_props:
             if prop in df_filtered.columns:
                 print(f"Using existing '{prop}' values from the input dataset")
             else:
-                print(f"Retrieving {prop} data from Materials Project...")
-                try:
-                    df_filtered[prop] = df_filtered[material_id_col].apply(
-                        lambda mp_id: get_mp_property(mp_id, prop, api_key)
-                    )
-                except ValueError as e:
-                    print(f"Error retrieving {prop}: {str(e)}")
-                    print(f"Skipping {prop} in ranking calculation")
-                    if prop in custom_props:
-                        custom_props.remove(prop)
+                props_to_fetch.append(prop)
+        
+        if props_to_fetch:
+            print(f"Retrieving symmetry data from Materials Project...")
+            # Use the batch function to retrieve all properties at once
+            properties_dict = get_mp_properties_batch(material_ids, props_to_fetch, api_key)
+            
+            # Add properties to the DataFrame - vectorized mapping
+            for prop in props_to_fetch:
+                # Create a temporary mapping dictionary for this property
+                prop_map = {}
+                for material_id in material_ids:
+                    if material_id in properties_dict and prop in properties_dict[material_id]:
+                        prop_map[material_id] = properties_dict[material_id][prop]
+                
+                # Add the property to the DataFrame using map (vectorized)
+                if prop_map:
+                    # Create Series for mapping and use it instead of iterating
+                    prop_series = pd.Series(prop_map)
+                    df_filtered[prop] = df_filtered[material_id_col].map(prop_series)
+                    print(f"Added {prop} for {len(prop_map)} materials")
+                    
+                    # Report any materials that didn't have this property
+                    missing_prop = [mid for mid in material_ids if mid not in prop_map]
+                    if missing_prop:
+                        print(f"Could not retrieve '{prop}' for {len(missing_prop)} materials:")
+                        for mid in missing_prop[:min(5, len(missing_prop))]:
+                            row = df_filtered[df_filtered[material_id_col] == mid].iloc[0]
+                            print(f"  - {mid} ({row.get('formula', 'No formula')})")
+                        if len(missing_prop) > 5:
+                            print(f"  - ... and {len(missing_prop) - 5} more")
+                else:
+                    print(f"Warning: Property '{prop}' could not be retrieved from Materials Project")
     elif custom_props and not material_id_col:
         print("Warning: Cannot retrieve custom properties without a material_id column.")
     
@@ -334,17 +420,17 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
     if custom_props:
         for prop in custom_props:
             if prop in df_filtered.columns:
-                # Check if property values are numerical
+                # Check if property values are numerical using vectorized pandas methods
                 try:
-                    # Convert to numeric, with non-numeric values becoming NaN
+                    # Convert to numeric using pandas vectorized function
                     numeric_values = pd.to_numeric(df_filtered[prop], errors='coerce')
                     
                     # If we have some valid numeric values
                     if not numeric_values.dropna().empty:
-                        # Store the numeric values back
+                        # Store the numeric values back - vectorized assignment
                         df_filtered[prop] = numeric_values
                         
-                        # Get normalization factor
+                        # Get normalization factor using pandas summary methods
                         prop_values = numeric_values.dropna()
                         value_range = prop_values.max() - prop_values.min()
                         
@@ -361,33 +447,43 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
                     print(f"Warning: Property '{prop}' cannot be converted to numeric values: {e}")
                     print(f"This property will be included in the dataframe but excluded from ranking.")
     
-    # Calculate rank score with default criteria
+    # Calculate rank score with default criteria - vectorized
     if include_default_ranking:
         for prop, weight in default_weights.items():
             if prop in df_filtered.columns:
                 if prop == "min_avg_distance":
-                    # Higher distances might be unfavorable
-                    df_filtered[prop] = df_filtered[prop].fillna(df_filtered[prop].mean())
+                    # Fill NaN values with mean - vectorized
+                    mean_value = df_filtered[prop].mean()
+                    df_filtered[prop] = df_filtered[prop].fillna(mean_value)
                 else:
+                    # Fill missing values with 0 - vectorized
                     df_filtered[prop] = df_filtered[prop].fillna(0)
                 
+                # Add weighted contribution to rank score - vectorized
                 df_filtered["rank_score"] += weight * df_filtered[prop]
     
-    # Add custom property contributions to rank score - ONLY for numerical properties
+    # Add custom property contributions to rank score - vectorized
     if custom_props and prop_weights:
         for prop in numerical_props:  # Use only numerical properties for ranking
             if prop in df_filtered.columns:
                 weight = prop_weights.get(prop, 1.0)
                 norm_factor = norm_factors.get(prop, 1.0)
                 
-                # Fill NaN values with mean to avoid skewing the ranking
+                # Fill NaN values with mean - vectorized
                 mean_value = df_filtered[prop].mean()
                 df_filtered[prop] = df_filtered[prop].fillna(mean_value)
                 
-                # Add normalized contribution to rank score
+                # Add normalized contribution to rank score - vectorized
                 df_filtered["rank_score"] += weight * norm_factor * df_filtered[prop]
     
-    # Sort by rank score in descending order (higher is better)
+    # Clean up temporary columns
+    if "cluster_sizes_list" in df_filtered.columns:
+        df_filtered = df_filtered.drop(columns=["cluster_sizes_list"])
+    if "point_groups_dict" in df_filtered.columns:
+        df_filtered = df_filtered.drop(columns=["point_groups_dict"])
+    
+    # Sort by rank score in descending order (higher is better) - vectorized
     df_sorted = df_filtered.sort_values("rank_score", ascending=False)
-
+    print(f"Final ranked dataframe has {len(df_sorted)} materials")
+    
     return df_sorted

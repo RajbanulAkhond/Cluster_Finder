@@ -7,26 +7,88 @@ This module contains utility functions used across the package.
 import numpy as np
 import re
 import requests
+import os
+from typing import List, Dict, Any, Optional, Union
 from mp_api.client import MPRester
 
+# Import our async utilities
+from cluster_finder.utils.async_utils import get_properties_batch, search_compounds_batch
 
-def calculate_metal_distances(structure, sites):
-    """Calculate distances between metal sites.
-    
-    Args:
-        structure (Structure): Pymatgen structure object
-        sites (list): List of sites to calculate distances between
-        
-    Returns:
-        list: List of distances between sites
+
+def calculate_metal_distances(metals, api_key):
     """
-    distances = []
-    for i in range(len(sites)):
-        for j in range(i+1, len(sites)):
-            distance = structure.get_distance(sites[i], sites[j])
-            distances.append(distance)
+    Calculate nearest-neighbor distances in pure elemental metals.
+    
+    This function retrieves structures of pure elemental metals from the 
+    Materials Project database and calculates the nearest-neighbor distances.
+    
+    Parameters:
+        metals (list): List of metal element symbols
+        api_key (str): Materials Project API key
+    
+    Returns:
+        dict: Dictionary mapping metal symbols to nearest-neighbor distances
+    """
+    from pymatgen.core.periodic_table import Element
+    
+    # Ensure metals are valid elements
+    valid_metals = []
+    metal_ids = []
+    metal_to_id = {}
+    
+    # Get material IDs for each metal
+    for metal in metals:
+        try:
+            element = Element(metal)
+            valid_metals.append(metal)
             
-    return distances
+            # Material ID pattern for pure elements: mp-xxx
+            # We'll look up the actual IDs from the API
+            metal_to_id[metal] = None
+        except:
+            print(f"Warning: {metal} is not a valid element symbol")
+    
+    # Get element material IDs using batch request
+    print(f"Retrieving data for {len(valid_metals)} metals using batch requests...")
+    
+    results = {}
+    try:
+        with MPRester(api_key) as mpr:
+            # Query materials with exact element compositions
+            for metal in valid_metals:
+                # For pure elements, we search by formula
+                docs = mpr.summary.search(
+                    chemsys=[metal],
+                    fields=["material_id", "structure"]
+                )
+                
+                if docs and len(docs) > 0:
+                    # Get the most stable structure (usually the first result)
+                    doc = docs[0]
+                    metal_to_id[metal] = doc.material_id
+                    
+                    # Calculate the nearest-neighbor distance
+                    structure = doc.structure
+                    metal_sites = [i for i, site in enumerate(structure) if site.species_string == metal]
+                    
+                    if len(metal_sites) > 1:
+                        min_dist = float('inf')
+                        for i in range(len(metal_sites)):
+                            for j in range(i+1, len(metal_sites)):
+                                dist = structure.get_distance(metal_sites[i], metal_sites[j])
+                                min_dist = min(min_dist, dist)
+                        
+                        results[metal] = min_dist
+                    else:
+                        results[metal] = None
+                        print(f"Warning: Could not find multiple {metal} sites in structure")
+                else:
+                    results[metal] = None
+                    print(f"Warning: No structures found for pure {metal}")
+    except Exception as e:
+        print(f"Error retrieving metal structures: {str(e)}")
+    
+    return results
 
 
 def get_transition_metals():
@@ -44,7 +106,7 @@ def get_transition_metals():
 
 
 def search_transition_metal_compounds(elements, api_key, min_elements=2, max_elements=4, 
-                                      min_magnetization=0.001, include_fields=None):
+                                      min_magnetization=0.001, max_magnetization=3, include_fields=None):
     """
     Search for transition metal compounds meeting specific criteria.
     
@@ -59,25 +121,16 @@ def search_transition_metal_compounds(elements, api_key, min_elements=2, max_ele
     Returns:
         list: List of matching entries
     """
-    # Define default fields to retrieve
-    default_fields = ["material_id", "formula_pretty", "structure", "total_magnetization"]
-    
-    # Combine with additional fields if provided
-    if include_fields:
-        fields = list(set(default_fields + include_fields))
-    else:
-        fields = default_fields
-    
-    # Initialize the MPRester
-    with MPRester(api_key) as mpr:
-        entries = mpr.materials.summary.search(
-            elements=elements,
-            num_elements=(min_elements, max_elements),
-            total_magnetization=(min_magnetization, None),
-            fields=fields
-        )
-    
-    return entries
+    # Use the batched version from async_utils
+    return search_compounds_batch(
+        elements=elements,
+        api_key=api_key,
+        min_elements=min_elements,
+        max_elements=max_elements,
+        min_magnetization=min_magnetization,
+        max_magnetization=max_magnetization,
+        include_fields=include_fields
+    )
 
 
 def generate_rotation_matrix(axis=None, angle=None):
@@ -147,8 +200,23 @@ def get_mp_property(material_id, property_name, api_key=None):
     else:
         # If no mp-XXXXX pattern found, use as is, but remove any trailing text
         clean_material_id = str(material_id).split('.')[0].strip()
+        # Try to add hyphen if missing
+        if clean_material_id.startswith('mp') and not clean_material_id.startswith('mp-'):
+            clean_material_id = f"mp-{clean_material_id.lstrip('mp')}"
     
-    print(f"Attempting to retrieve {property_name} for {clean_material_id}")
+    # Use the batched property retrieval for a single material
+    results = get_properties_batch(
+        material_ids=[clean_material_id],
+        properties=[property_name],
+        api_key=api_key
+    )
+    
+    # Check if we got results
+    if clean_material_id in results and property_name in results[clean_material_id]:
+        return results[clean_material_id][property_name]
+    
+    # If we couldn't get the property via the batch method, fall back to the original implementation
+    print(f"Attempting to retrieve {property_name} for {clean_material_id} using fallback methods")
     
     # Using the MP API v0.41.1 compatible methods
     try:
@@ -227,3 +295,42 @@ def get_mp_property(material_id, property_name, api_key=None):
         
     # If all attempts fail, raise an error
     raise ValueError(f"Could not retrieve {property_name} for material {material_id}")
+
+
+def get_mp_properties_batch(material_ids: List[str], properties: List[str], api_key: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """
+    Retrieve multiple properties for multiple materials in a single batch request.
+    
+    Parameters:
+        material_ids (List[str]): List of Materials Project IDs (e.g., ['mp-149', 'mp-13'])
+        properties (List[str]): List of property names to retrieve
+        api_key (str, optional): Materials Project API key. If None, will use the API key
+                                set in the MAPI_KEY environment variable.
+    
+    Returns:
+        Dict[str, Dict[str, Any]]: Dictionary mapping material IDs to dictionaries of properties
+        
+    Example:
+        >>> properties = get_mp_properties_batch(['mp-149', 'mp-13'], ['energy_above_hull', 'band_gap'])
+        >>> print(properties['mp-149']['band_gap'])
+    """
+    # Clean up material IDs
+    clean_material_ids = []
+    
+    for mid in material_ids:
+        if mid is None:
+            continue
+            
+        mp_id_match = re.search(r'(mp-\d+)', str(mid))
+        if mp_id_match:
+            clean_material_ids.append(mp_id_match.group(1))
+        else:
+            # If no mp-XXXXX pattern found, use as is, but remove any trailing text
+            clean_mid = str(mid).split('.')[0].strip()
+            # Try to add hyphen if missing
+            if clean_mid.startswith('mp') and not clean_mid.startswith('mp-'):
+                clean_mid = f"mp-{clean_mid.lstrip('mp')}"
+            clean_material_ids.append(clean_mid)
+    
+    # Use the batch property retrieval function
+    return get_properties_batch(clean_material_ids, properties, api_key)

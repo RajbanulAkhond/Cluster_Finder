@@ -15,6 +15,7 @@ from ase.data.colors import jmol_colors
 from ase.data import chemical_symbols
 import numpy as np
 import matplotlib.colors as mcolors
+from ase import Atom
 
 
 def visualize_graph(graph, structure=None, tm_indices=None, material_id=None, formula=None, use_3d=False):
@@ -185,22 +186,30 @@ def visualize_clusters_in_compound(structure, clusters, cluster_index=None, rota
     except ValueError as e:
         # Handle case where site is not found in structure
         pass
+    
+    # Add centroid marker if available
+    has_centroid = False
+    if "centroid" in cluster:
+        has_centroid = True
+        centroid_coords = cluster["centroid"]
+        
+        # Make a copy of the atoms object to avoid modifying the original
+        atoms_with_centroid = atoms.copy()
+        
+        # Add the centroid as a He atom (small atom) with a black color
+        atoms_with_centroid.append(Atom('He', centroid_coords))
+        
+        # Extend the atom_colors array to include the centroid color (black)
+        atom_colors = np.vstack([atom_colors, [0.0, 0.0, 0.0]])  # Black color RGB
+        
+        # Use the new atoms object with centroid
+        atoms = atoms_with_centroid
         
     # Create a Matplotlib figure and axis
     fig, ax = plt.subplots(figsize=(12, 10))
     
     # Plot atoms with specified colors and perspective view
     plot_atoms(atoms, ax, radii=0.5, rotation=rotation, colors=atom_colors)
-    
-    # Add centroid marker if available
-    if "centroid" in cluster:
-        # Get the plot transformation
-        ax_transform = ax.transData
-        # Plot the centroid as a star marker
-        centroid = cluster["centroid"]
-        ax.scatter(centroid[0], centroid[1], transform=ax_transform, 
-                  color='gold', marker='*', s=200, zorder=10, 
-                  edgecolor='black', label='Centroid')
                   
     # Add a legend for atom types
     legend_handles = []
@@ -211,9 +220,9 @@ def visualize_clusters_in_compound(structure, clusters, cluster_index=None, rota
     legend_handles.append(
         plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=[1.0, 0.0, 0.0], markersize=10, label='Cluster Atoms')
     )
-    if "centroid" in cluster:
+    if has_centroid:
         legend_handles.append(
-            plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='gold', markersize=10, label='Centroid')
+            plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=[0.0, 0.0, 0.0], markersize=10, label='Centroid')
         )
     ax.legend(handles=legend_handles, loc='lower left', bbox_to_anchor=(1, 1), title='Atom Types')
     

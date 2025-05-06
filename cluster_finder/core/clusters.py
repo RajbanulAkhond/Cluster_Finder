@@ -199,6 +199,7 @@ def analyze_clusters(clusters, lattice, cluster_size=DEFAULT_CLUSTER_SIZE+1, max
 def identify_unique_clusters(clusters, use_symmetry=True, tolerance=1e-5):
     """
     Identify unique clusters based on atoms, connectivity, and optionally point group symmetry.
+    Assigns consistent labels to clusters with the same characteristics.
     
     Parameters:
         clusters (list): List of cluster dictionaries
@@ -206,12 +207,14 @@ def identify_unique_clusters(clusters, use_symmetry=True, tolerance=1e-5):
         tolerance (float): Distance threshold for considering clusters as unique
         
     Returns:
-        list: List of unique clusters with metadata and labels
+        list: List of all clusters with metadata and consistent labels
     """
-    unique_clusters = []
-    seen_cluster_keys = set()
+    # Create a mapping of cluster_key -> label
+    cluster_key_to_label = {}
+    label_count = 0
+    labeled_clusters = []
     
-    for i, cluster in enumerate(clusters):
+    for cluster in clusters:
         # Always consider basic properties (size, distance, elements)
         atom_types = sorted([site.specie.symbol for site in cluster["sites"]])
         basic_key = (
@@ -245,26 +248,33 @@ def identify_unique_clusters(clusters, use_symmetry=True, tolerance=1e-5):
             # Use only basic properties for the key
             cluster_key = basic_key
         
-        if cluster_key not in seen_cluster_keys:
-            seen_cluster_keys.add(cluster_key)
-            
-            # Add a label to the cluster if not already present
-            cluster_with_label = cluster.copy()
-            if "label" not in cluster_with_label:
-                cluster_with_label["label"] = f"X{len(unique_clusters)}"
-                
-            unique_clusters.append(cluster_with_label)
+        # Create a copy of the cluster to avoid modifying the original
+        cluster_with_label = cluster.copy()
+        
+        # If this cluster key is already seen, use the existing label
+        # Otherwise, create a new label
+        if cluster_key not in cluster_key_to_label:
+            label = f"X{label_count}"
+            cluster_key_to_label[cluster_key] = label
+            label_count += 1
+        else:
+            label = cluster_key_to_label[cluster_key]
+        
+        # Assign the label to the cluster
+        cluster_with_label["label"] = label
+        labeled_clusters.append(cluster_with_label)
     
-    return unique_clusters
+    return labeled_clusters
 
 
-def get_compounds_with_clusters(entries, transition_metals):
+def get_compounds_with_clusters(entries, transition_metals, primary_transition_metal=None):
     """
     Process a list of entries to find and analyze clusters in each compound.
     
     Parameters:
         entries (list): List of entries containing material data
         transition_metals (list): List of transition metal element symbols
+        primary_transition_metal (str, optional): The main transition metal to filter clusters
         
     Returns:
         tuple: (compounds_with_clusters, graph, structure, tm_indices) where:
@@ -283,13 +293,22 @@ def get_compounds_with_clusters(entries, transition_metals):
         formula = entry.formula_pretty
         structure = entry.structure
         total_magnetization = entry.total_magnetization
-
         connectivity_matrix, tm_indices = create_connectivity_matrix(structure, transition_metals)
         graph = structure_to_graph(connectivity_matrix)
-
         # Find all clusters
         clusters = find_clusters(structure, graph, tm_indices)
         analyzed_clusters = analyze_clusters(clusters, structure.lattice)
+
+        # Filter clusters to ensure they contain the primary transition metal
+        if primary_transition_metal:
+            analyzed_clusters = [
+                c for c in analyzed_clusters
+                if any(site.specie.symbol == primary_transition_metal for site in c["sites"])
+            ]
+
+        # Skip compounds that now have zero valid clusters
+        if not analyzed_clusters:
+            continue
 
         compounds_with_clusters.append({
             "material_id": material_id,

@@ -8,6 +8,9 @@ This package provides tools to identify, analyze, and visualize
 clusters of atoms (particularly transition metals) in crystal structures.
 """
 
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+
 __version__ = "0.1.0"
 
 # Import core functionality

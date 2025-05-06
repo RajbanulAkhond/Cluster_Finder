@@ -22,7 +22,8 @@ import ast
 import cluster_finder as cf
 from cluster_finder.utils.helpers import (
     search_transition_metal_compounds,
-    get_transition_metals
+    get_transition_metals,
+    get_mp_properties_batch  # Import the new batch function
 )
 from cluster_finder.core.clusters import get_compounds_with_clusters
 from cluster_finder.core.structure import (
@@ -45,11 +46,11 @@ from cluster_finder.visualization.visualize import (
 from cluster_finder.io.fileio import export_csv_data
 
 # Define constants
-API_KEY = "Your_API_Key_Here"  # Replace with your Materials Project API key
+API_KEY = "6rcVBNjGRVyfiGPYaLy2xVJNB9X8cN8q"  # Replace with your Materials Project API key
 ELEMENTS = ["Nb", "Cl"]
-OUTPUT_PDF = "nb_cl_analysis_results.pdf"
-RAW_OUTPUT_CSV = "nb_cl_analysis_results_raw.csv"
-SUMMARY_OUTPUT_CSV = "nb_cl_analysis_results_summary.csv"
+OUTPUT_PDF = "Nb_Cl_analysis_results.pdf"
+RAW_OUTPUT_CSV = "Nb_Cl_analysis_results_raw.csv"
+SUMMARY_OUTPUT_CSV = "Nb_Cl_analysis_results_summary.csv"
 
 def main():
     """Main function to execute the workflow."""
@@ -57,12 +58,14 @@ def main():
     
     # 1. Search for compounds with Nb and Cl
     print(f"Searching for compounds with elements: {ELEMENTS}")
+    # This already uses the batch API internally after our changes
     compounds = search_transition_metal_compounds(
         elements=ELEMENTS,
         api_key=API_KEY,
         min_elements=2,
         max_elements=4,
-        min_magnetization=0.1
+        min_magnetization=0.01,  # Set the lower bound of magnetization
+        max_magnetization=5     # Set the upper bound of magnetization
     )
     print(f"Found {len(compounds)} compounds containing {ELEMENTS}")
     
@@ -72,7 +75,11 @@ def main():
     
     # 2. Process compounds to find clusters
     print("Processing compounds to identify clusters...")
-    compounds_with_clusters = get_compounds_with_clusters(compounds, transition_metals)
+    compounds_with_clusters = get_compounds_with_clusters(
+        compounds,
+        transition_metals,
+        primary_transition_metal=ELEMENTS[0]  # Ensure clusters contain the primary TM (Nb)
+    )
     
     # Filter to keep only compounds that have clusters
     compounds_with_clusters = [comp for comp in compounds_with_clusters if comp["clusters"]]
@@ -86,11 +93,35 @@ def main():
     print("Post-processing compounds dataframe...")
     processed_df = postprocessed_clusters_dataframe(compounds_df)
 
+    # Batch retrieve additional properties for all materials at once
+    print("Retrieving additional materials properties in batch...")
+    # Extract all unique material IDs
+    material_ids = processed_df['material_id'].unique().tolist()
+    
+    # Define properties to retrieve
+    properties_to_get = ["energy_above_hull", "formation_energy_per_atom", "band_gap", "total_magnetization"]
+    
+    # Use our new batch function to get all properties at once
+    properties_dict = get_mp_properties_batch(material_ids, properties_to_get, API_KEY)
+    
+    # Add properties to the dataframe
+    for property_name in properties_to_get:
+        # Create a temporary dictionary for mapping material_id to property value
+        property_map = {}
+        for material_id, props in properties_dict.items():
+            if property_name in props:
+                property_map[material_id] = props[property_name]
+        
+        # Update the dataframe with the property values
+        if property_map:
+            processed_df[property_name] = processed_df['material_id'].map(property_map)
+            print(f"Added {property_name} for {len(property_map)} materials")
+
     # Rank clusters using the existing rank_clusters function
     print("Ranking clusters...")
     ranked_df = rank_clusters(
         data_source=processed_df,
-        api_key=API_KEY,
+        api_key=API_KEY,  # API key still needed for internal functions
         custom_props=["symmetry", "energy_above_hull"],
         prop_weights={
             #"formation_energy_per_atom": -1.0,  # Lower formation energy is better
@@ -100,12 +131,8 @@ def main():
         include_default_ranking=True  # Include default criteria like min_avg_distance, point_group_order, etc.
     )
 
-    # Save the full result to CSV
-    #print(f"Saving results to {RAW_OUTPUT_CSV}...")
-    #export_csv_data(ranked_df, RAW_OUTPUT_CSV)
-
     # Create a summary dataframe by dropping specific columns
-    summary_df = ranked_df.drop(['conventional_cluster_lattice', 'cluster_sites','point_groups_dict','max_point_group_order','highest_point_group','space_group_order'], axis=1, errors='ignore')
+    summary_df = ranked_df.drop(['magnetization', 'conventional_cluster_lattice', 'cluster_sites','point_groups_dict','max_point_group_order','highest_point_group','space_group_order'], axis=1, errors='ignore')
     # Save the summary dataframe to CSV
     print(f"Saving summary results to {SUMMARY_OUTPUT_CSV}...")
     export_csv_data(summary_df, SUMMARY_OUTPUT_CSV)

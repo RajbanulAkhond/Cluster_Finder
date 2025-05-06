@@ -1,0 +1,40 @@
+# Cluster Finder Systems Configuration
+# This file defines the element combinations to analyze
+
+# List of transition metals to include in the analysis
+transition_metals:
+  - "Nb"
+  - "V"
+  - "Ir"
+
+# List of anions to include in the analysis  
+anions:
+  - "Cl"
+  - "O"
+  - "N"
+
+# Element filtering parameters
+element_filters:
+  min_elements: 2
+  max_elements: 4
+
+# Property filters
+property_filters:
+  min_magnetization: 0.01
+  max_magnetization: 5.0
+
+# Analysis parameters
+analysis_params:
+  top_n_compounds: 10  # Number of top compounds to visualize
+  
+# Ranking weights for different properties
+ranking_weights:
+  energy_above_hull: -2.0
+  symmetry: 0.0
+  
+# Properties to retrieve from Materials Project
+mp_properties:
+  - "energy_above_hull"
+  - "formation_energy_per_atom"
+  - "band_gap"
+  - "total_magnetization"

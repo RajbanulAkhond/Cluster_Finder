@@ -1,15 +1,13 @@
 """
 Command-line interface for cluster_finder package.
 
-This module provides a command-line interface to use the functionality
-of the cluster_finder package.
+This module provides a modern Typer-based CLI for the cluster_finder package.
 """
-
 import os
 import sys
 import re
-import argparse
 import json
+import argparse
 import numpy as np
 import pandas as pd
 from typing import List, Optional
@@ -17,6 +15,18 @@ from pathlib import Path
 from pymatgen.core.structure import Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from mp_api.client import MPRester
+import matplotlib.pyplot as plt
+
+try:
+    import typer
+    from rich.console import Console
+    from rich.table import Table
+    from rich import print as rprint
+    HAS_MODERN_CLI = True
+except ImportError:
+    print("Error: This package requires typer and rich packages. Install them using:")
+    print("pip install typer rich")
+    sys.exit(1)
 
 from .core.graph import create_connectivity_matrix, structure_to_graph
 from .core.clusters import (
@@ -26,7 +36,8 @@ from .core.clusters import (
 from .core.structure import generate_lattice_with_clusters
 from .visualization.visualize import (
     visualize_graph,
-    visualize_clusters_in_compound
+    visualize_clusters_in_compound,
+    visualize_cluster_lattice
 )
 from .io.fileio import (
     export_structure_to_cif,
@@ -37,96 +48,15 @@ from .core.utils import cluster_summary_stat
 from .utils.helpers import get_transition_metals, get_mp_property
 from .analysis.dataframe import cluster_compounds_dataframe
 from .analysis.postprocess import rank_clusters
-
-
-def get_parser():
-    """
-    Create the command-line argument parser.
-    
-    Returns:
-        argparse.ArgumentParser: Configured argument parser
-    """
-    parser = argparse.ArgumentParser(
-        description='Cluster Finder - Find and analyze atomic clusters in crystal structures'
-    )
-    
-    # Add subparsers for different commands
-    subparsers = parser.add_subparsers(dest='command', help='Command to execute')
-    
-    # Find clusters in a structure file
-    find_parser = subparsers.add_parser('find', help='Find clusters in a structure file')
-    find_parser.add_argument('structure_file', help='Structure file (CIF, POSCAR, etc.)')
-    find_parser.add_argument('--elements', '-e', nargs='+', help='Elements to consider for clusters (default: all transition metals)')
-    find_parser.add_argument('--radius', '-r', type=float, default=3.5, help='Maximum atom-to-atom distance for cluster search (default: 3.5 Å)')
-    find_parser.add_argument('--min-size', '-s', type=int, default=2, help='Minimum cluster size (default: 2)')
-    find_parser.add_argument('--output', '-o', help='Output file prefix (default: based on input filename)')
-    find_parser.add_argument('--no-vis', action='store_true', help='Disable visualization')
-    find_parser.add_argument('--format', choices=['json', 'csv', 'both'], default='json', help='Output format (default: json)')
-    
-    # Analyze clusters from a previous run
-    analyze_parser = subparsers.add_parser('analyze', help='Analyze clusters from a previous run')
-    analyze_parser.add_argument('json_file', help='JSON file with cluster data')
-    analyze_parser.add_argument('--output', '-o', help='Output file prefix')
-    analyze_parser.add_argument('--format', choices=['csv', 'json', 'both'], default='csv', help='Output format (default: csv)')
-    analyze_parser.add_argument('--export-conventional', action='store_true', 
-                               help='Export conventional structure as CIF file')
-    
-    # Get a material from Materials Project by ID
-    get_material_parser = subparsers.add_parser('get-material', help='Get a material from Materials Project by ID and export as CIF')
-    get_material_parser.add_argument('material_id', help='Materials Project ID (e.g., mp-149)')
-    get_material_parser.add_argument('--output', '-o', help='Output file path (default: material_id.cif)')
-    get_material_parser.add_argument('--api-key', help='Materials Project API key (optional, will use environment variable if not provided)')
-    get_material_parser.add_argument('--conventional', action='store_true', help='Export conventional cell instead of primitive cell')
-    get_material_parser.add_argument('--no-analysis', action='store_true', help='Skip structure analysis information')
-    
-    # Visualize clusters
-    vis_parser = subparsers.add_parser('visualize', help='Visualize clusters')
-    vis_parser.add_argument('json_file', help='JSON file with cluster data')
-    vis_parser.add_argument('--output', '-o', help='Output file prefix')
-    vis_parser.add_argument('--show', action='store_true', help='Show visualization (requires GUI)')
-    vis_parser.add_argument('--dpi', type=int, default=300, help='DPI for saved images (default: 300)')
-    vis_parser.add_argument('--cluster-index', '-i', type=int, help='Index of specific cluster to visualize (0-based)')
-    vis_parser.add_argument('--rotation', type=str, default="45x,30y,0z", 
-                           help='Rotation parameters for visualization (default: "45x,30y,0z")')
-    vis_parser.add_argument('--type', choices=['cluster', 'graph', 'lattice', 'all'], default='cluster',
-                          help='Type of visualization: cluster (default), graph (connectivity), lattice (conventional cell), or all')
-    vis_parser.add_argument('--3d', dest='use_3d', action='store_true', help='Use 3D visualization for graph (only applies to graph type)')
-    
-    # Batch process multiple structures
-    batch_parser = subparsers.add_parser('batch', help='Process multiple structure files')
-    batch_parser.add_argument('input_dir', help='Directory containing structure files')
-    batch_parser.add_argument('--pattern', default='*.cif', help='Glob pattern for input files (default: *.cif)')
-    batch_parser.add_argument('--elements', '-e', nargs='+', help='Elements to consider for clusters')
-    batch_parser.add_argument('--radius', '-r', type=float, default=3.5, help='Maximum atom-to-atom distance')
-    batch_parser.add_argument('--output', '-o', help='Output directory')
-    
-    # Generate summary statistics
-    summary_parser = subparsers.add_parser('summary', help='Generate summary statistics')
-    summary_parser.add_argument('input_file', help='JSON or CSV file with cluster data')
-    summary_parser.add_argument('--output', '-o', help='Output file for summary')
-    summary_parser.add_argument('--retrieve-missing', action='store_true', 
-                              help='Retrieve missing properties (e.g., total_magnetization) from Materials Project')
-    summary_parser.add_argument('--api-key', help='Materials Project API key (used if retrieve-missing is enabled)')
-    
-    # Rank clusters based on various criteria
-    rank_parser = subparsers.add_parser('rank', help='Rank clusters based on geometry, symmetry, and stability')
-    rank_parser.add_argument('input_file', help='CSV file with cluster data')
-    rank_parser.add_argument('--output', '-o', help='Output file prefix for ranked data')
-    rank_parser.add_argument('--api-key', help='Materials Project API key (optional, will use environment variable if not provided)')
-    rank_parser.add_argument('--top', type=int, default=None, help='Show only top N ranked clusters')
-    rank_parser.add_argument('--format', choices=['csv', 'json', 'both'], default='csv', help='Output format (default: csv)')
-    rank_parser.add_argument('--custom-props', nargs='+', help='Custom properties to include in ranking (e.g., formation_energy_per_atom density)')
-    rank_parser.add_argument('--prop-weights', nargs='+', help='Weights for custom properties (format: prop_name:weight, e.g., formation_energy_per_atom:-1.0)')
-    rank_parser.add_argument('--no-default-ranking', action='store_true', help='Disable default ranking criteria')
-    
-    return parser
-
+from .utils.config_utils import load_config, get_element_combinations
+from .analysis.analysis import run_analysis
+from .analysis.batch import run_batch_analysis
 
 def validate_input_file(file_path: str, expected_format: Optional[str] = None) -> bool:
     """
     Validate input file existence and format.
     
-    Parameters:
+    Args:
         file_path (str): Path to the input file
         expected_format (str, optional): Expected file format (extension)
         
@@ -146,41 +76,53 @@ def validate_input_file(file_path: str, expected_format: Optional[str] = None) -
     
     return True
 
+# Create Typer app
+app = typer.Typer(help="Cluster Finder CLI")
+analyze_app = typer.Typer(help="Advanced analysis commands")
+app.add_typer(analyze_app, name="analyze")
 
-def find_command(args):
+console = Console()
+
+@app.command("find")
+def find_command(
+    structure_file: str = typer.Argument(..., help="Structure file (CIF, POSCAR, etc.)"),
+    elements: Optional[List[str]] = typer.Option(None, "--elements", "-e", help="Elements to consider for clusters (default: all transition metals)"),
+    radius: float = typer.Option(3.5, "--radius", "-r", help="Maximum atom-to-atom distance for cluster search (default: 3.5 Å)"),
+    min_size: int = typer.Option(2, "--min-size", "-s", help="Minimum cluster size (default: 2)"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file prefix (default: based on input filename)"),
+    no_vis: bool = typer.Option(False, "--no-vis", help="Disable visualization"),
+    format: str = typer.Option("json", "--format", "-f", help="Output format: json, csv, or both")
+):
     """Find clusters in a structure."""
     try:
-        # Validate input file
-        validate_input_file(args.structure_file)
+        validate_input_file(structure_file)
         
         # Load structure
-        structure = Structure.from_file(args.structure_file)
-        print(f"\nFound {len(structure)} sites in {structure.composition.reduced_formula}")
+        structure = Structure.from_file(structure_file)
+        console.print(f"\nFound {len(structure)} sites in {structure.composition.reduced_formula}")
         
         # Use default elements if none provided
-        elements = args.elements or get_transition_metals()
+        elements_list = elements or get_transition_metals()
         
         # Create connectivity matrix
-        matrix, indices = create_connectivity_matrix(structure, elements, args.radius)
+        matrix, indices = create_connectivity_matrix(structure, elements_list, radius)
         
         # Create graph
         graph = structure_to_graph(matrix)
         
         # Find clusters
-        clusters = find_clusters(structure, graph, indices, args.min_size)
+        clusters = find_clusters(structure, graph, indices, min_size)
         
         # Analyze clusters
         analyzed_clusters = analyze_clusters(clusters, structure.lattice) if clusters else []
         
-        # Extract material_id from filename if it looks like an MP ID
-        filename_base = os.path.basename(args.structure_file)
+        # Extract material_id from filename
+        filename_base = os.path.basename(structure_file)
         material_id = os.path.splitext(filename_base)[0]
-        # If the filename looks like an MP id (mp-XXXXX), use it directly
         if not re.match(r'mp-\d+', material_id):
-            # Otherwise, use the filename as a generic ID
             material_id = filename_base
         
-        # Convert analyzed clusters to JSON-serializable format
+        # Convert clusters to JSON format
         json_clusters = []
         for cluster in analyzed_clusters:
             json_cluster = {
@@ -199,76 +141,75 @@ def find_command(args):
             "structure": structure.as_dict(),
             "clusters": json_clusters,
             "num_clusters": len(analyzed_clusters)
-            # No default total_magnetization
         }
         
         # Determine output path
-        output_base = args.output or os.path.splitext(args.structure_file)[0]
+        output_base = output or os.path.splitext(structure_file)[0]
         os.makedirs(os.path.dirname(output_base) or '.', exist_ok=True)
         
         # Save results
-        if args.format in ['json', 'both']:
+        if format in ['json', 'both']:
             json_file = f"{output_base}_clusters.json"
             with open(json_file, "w") as f:
                 json.dump(result, f, indent=2)
-            print(f"Saved cluster data to {json_file}")
+            console.print(f"Saved cluster data to {json_file}")
         
-        if args.format in ['csv', 'both']:
+        if format in ['csv', 'both']:
             df = cluster_compounds_dataframe([{
                 "material_id": material_id,
                 "formula": result["formula"],
-                "structure": structure,  # Pass the Structure object directly
-                "clusters": analyzed_clusters,  # Pass the original clusters with PeriodicSite objects
+                "structure": structure,
+                "clusters": analyzed_clusters,
                 "num_clusters": result["num_clusters"]
-                # No default total_magnetization
             }])
-            if df is not None:  # Check if DataFrame was created successfully
+            if df is not None:
                 csv_file = f"{output_base}_clusters.csv"
                 export_csv_data(df, csv_file)
-                print(f"Saved cluster data to {csv_file}")
+                console.print(f"Saved cluster data to {csv_file}")
         
         # Visualize if requested
-        if not args.no_vis and analyzed_clusters:
-            import matplotlib.pyplot as plt
+        if not no_vis and analyzed_clusters:
             fig = visualize_clusters_in_compound(structure, analyzed_clusters)
             png_file = f"{output_base}_clusters.png"
-            plt.savefig(png_file, dpi=300)
-            print(f"Saved cluster visualization to {png_file}")
+            fig.savefig(png_file, dpi=300)
+            console.print(f"Saved cluster visualization to {png_file}")
         
-        print(f"\nFound {len(analyzed_clusters)} clusters in {structure.composition.reduced_formula}")
+        console.print(f"\n[green]Found {len(analyzed_clusters)} clusters in {structure.composition.reduced_formula}[/green]")
         
     except Exception as e:
-        print(f"Error in find command: {str(e)}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]Error: {str(e)}[/red]")
+        raise typer.Exit(code=1)
 
-
-def analyze_command(args):
-    """Execute the analyze command to further analyze clusters."""
+@app.command("analyze")
+def analyze_command(
+    json_file: str = typer.Argument(..., help="JSON file with cluster data"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file prefix"),
+    format: str = typer.Option("csv", "--format", "-f", help="Output format: csv, json, or both"),
+    export_conventional: bool = typer.Option(False, "--export-conventional", help="Export conventional structure as CIF file")
+):
+    """Analyze clusters from a previous run."""
     try:
-        # Validate input file
-        validate_input_file(args.json_file, '.json')
+        validate_input_file(json_file, '.json')
         
         # Load data
-        with open(args.json_file, 'r') as f:
+        with open(json_file, 'r') as f:
             data = json.load(f)
         
         # Create structure from dict
         structure = Structure.from_dict(data["structure"])
         
-        # Reconstruct cluster objects from JSON data
+        # Reconstruct clusters
         clusters = []
         for cluster_dict in data["clusters"]:
-            # Create PeriodicSite objects from site dictionaries
             sites = []
             for site_dict in cluster_dict.get("sites", []):
                 if isinstance(site_dict, dict) and "species" in site_dict:
                     try:
                         sites.append(Structure.from_dict({"lattice": structure.lattice.as_dict(), 
-                                                         "sites": [site_dict]}).sites[0])
+                                                       "sites": [site_dict]}).sites[0])
                     except Exception as e:
-                        print(f"Warning: Could not reconstruct site: {e}")
+                        console.print(f"[yellow]Warning: Could not reconstruct site: {e}[/yellow]")
             
-            # Build a proper cluster object
             cluster = {
                 "size": cluster_dict["size"],
                 "average_distance": cluster_dict["average_distance"],
@@ -278,12 +219,11 @@ def analyze_command(args):
             }
             clusters.append(cluster)
         
-        # Use generate_lattice_with_clusters function for point group analysis
+        # Generate lattice analysis
         conventional_structure, space_group_symbol, point_groups = generate_lattice_with_clusters(structure, clusters)
         
-        # Create compound object
         compound = {
-            "material_id": os.path.basename(args.json_file).split('_')[0],
+            "material_id": os.path.basename(json_file).split('_')[0],
             "formula": data["formula"],
             "clusters": clusters,
             "structure": structure,
@@ -296,15 +236,15 @@ def analyze_command(args):
         df = cluster_compounds_dataframe([compound])
         
         # Determine output prefix
-        output_prefix = args.output or os.path.splitext(os.path.basename(args.json_file))[0]
+        output_prefix = output or os.path.splitext(os.path.basename(json_file))[0]
         
         # Save results
-        if args.format in ['csv', 'both']:
+        if format in ['csv', 'both']:
             csv_file = f"{output_prefix}_analysis.csv"
             export_csv_data(df, csv_file)
-            print(f"Saved analysis to {csv_file}")
+            console.print(f"Saved analysis to {csv_file}")
         
-        if args.format in ['json', 'both']:
+        if format in ['json', 'both']:
             json_file = f"{output_prefix}_analysis.json"
             with open(json_file, 'w') as f:
                 json.dump({
@@ -315,57 +255,60 @@ def analyze_command(args):
                     "num_clusters": len(data["clusters"]),
                     "clusters": data["clusters"]
                 }, f, indent=2)
-            print(f"Saved analysis to {json_file}")
+            console.print(f"Saved analysis to {json_file}")
         
         # Export conventional structure if requested
-        if args.export_conventional:
+        if export_conventional:
             conventional_cif_file = f"{output_prefix}_conventional.cif"
             export_structure_to_cif(conventional_structure, conventional_cif_file)
-            print(f"Saved conventional structure to {conventional_cif_file}")
+            console.print(f"Saved conventional structure to {conventional_cif_file}")
         
         # Print summary
-        print(f"\nStructure Analysis for {data['formula']}")
-        print(f"Space Group: {space_group_symbol}")
-        
-        # Print point groups information
-        print("Point Groups:")
+        console.print(f"\n[green]Structure Analysis for {data['formula']}[/green]")
+        console.print(f"Space Group: {space_group_symbol}")
+        console.print("Point Groups:")
         for cluster_label, point_group in point_groups.items():
-            print(f"  {cluster_label}: {point_group}")
-        
-        print(f"Number of Clusters: {len(data['clusters'])}")
+            console.print(f"  {cluster_label}: {point_group}")
+        console.print(f"Number of Clusters: {len(data['clusters'])}")
         
     except Exception as e:
-        print(f"Error in analyze command: {str(e)}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]Error: {str(e)}[/red]")
+        raise typer.Exit(code=1)
 
-
-def visualize_command(args):
-    """Execute the visualize command to create visualizations."""
+@app.command("visualize")
+def visualize_command(
+    json_file: str = typer.Argument(..., help="JSON file with cluster data"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file prefix"),
+    show: bool = typer.Option(False, "--show", help="Show visualization (requires GUI)"),
+    dpi: int = typer.Option(300, "--dpi", help="DPI for saved images (default: 300)"),
+    cluster_index: Optional[int] = typer.Option(None, "--cluster-index", "-i", help="Index of specific cluster to visualize (0-based)"),
+    rotation: str = typer.Option("45x,30y,0z", "--rotation", help="Rotation parameters for visualization"),
+    type: str = typer.Option("cluster", "--type", "-t", help="Type of visualization: cluster, graph, lattice, or all"),
+    use_3d: bool = typer.Option(False, "--3d", help="Use 3D visualization for graph")
+):
+    """Visualize clusters."""
     try:
-        # Validate input file
-        validate_input_file(args.json_file, '.json')
+        validate_input_file(json_file, '.json')
         
         # Load data
-        with open(args.json_file, 'r') as f:
+        with open(json_file, 'r') as f:
             data = json.load(f)
         
         # Create structure from dict
         structure = Structure.from_dict(data["structure"])
         
-        # Reconstruct cluster objects from JSON
+        # Reconstruct clusters
         clusters = []
         for cluster_dict in data["clusters"]:
-            # Create PeriodicSite objects from site dictionaries
             sites = []
             for site_dict in cluster_dict.get("sites", []):
                 if isinstance(site_dict, dict) and "species" in site_dict:
                     try:
                         sites.append(Structure.from_dict({"lattice": structure.lattice.as_dict(), 
-                                                         "sites": [site_dict]}).sites[0])
+                                                       "sites": [site_dict]}).sites[0])
                     except Exception as e:
-                        print(f"Warning: Could not reconstruct site: {e}")
+                        console.print(f"[yellow]Warning: Could not reconstruct site: {e}[/yellow]")
             
-            # Build a proper cluster object
             cluster = {
                 "size": cluster_dict["size"],
                 "average_distance": cluster_dict["average_distance"],
@@ -376,47 +319,36 @@ def visualize_command(args):
             clusters.append(cluster)
         
         # Determine output prefix
-        output_prefix = args.output or os.path.splitext(os.path.basename(args.json_file))[0]
-        
-        # Import needed visualization modules
-        import matplotlib.pyplot as plt
-        from .visualization.visualize import visualize_cluster_lattice
+        output_prefix = output or os.path.splitext(os.path.basename(json_file))[0]
         
         # Check cluster index bounds
-        if args.cluster_index is not None and (args.cluster_index < 0 or args.cluster_index >= len(clusters)):
-            print(f"Warning: Cluster index {args.cluster_index} is out of bounds (0-{len(clusters)-1}). Using default.")
-            args.cluster_index = None
-        
-        # Validate visualization type choice
-        vis_types = []
-        if args.type == 'all':
-            vis_types = ['cluster', 'graph', 'lattice']
-        else:
-            vis_types = [args.type]
+        if cluster_index is not None and (cluster_index < 0 or cluster_index >= len(clusters)):
+            console.print(f"[yellow]Warning: Cluster index {cluster_index} is out of bounds (0-{len(clusters)-1}). Using default.[/yellow]")
+            cluster_index = None
         
         # Create the requested visualizations
+        vis_types = ['cluster', 'graph', 'lattice'] if type == 'all' else [type]
+        
         for vis_type in vis_types:
             try:
                 if vis_type == 'cluster':
-                    # Cluster visualization
                     fig = visualize_clusters_in_compound(
                         structure, 
                         clusters, 
-                        cluster_index=args.cluster_index, 
-                        rotation=args.rotation
+                        cluster_index=cluster_index,
+                        rotation=rotation
                     )
                     if fig:
-                        cluster_idx = args.cluster_index if args.cluster_index is not None else 0
+                        cluster_idx = cluster_index if cluster_index is not None else 0
                         png_file = f"{output_prefix}_cluster_{cluster_idx+1}.png"
-                        fig.savefig(png_file, dpi=args.dpi)
-                        print(f"Saved cluster visualization to {png_file}")
+                        fig.savefig(png_file, dpi=dpi)
+                        console.print(f"Saved cluster visualization to {png_file}")
                         
-                        if args.show:
+                        if show:
                             plt.figure(fig.number)
                             plt.show(block=False)
-                    
+                
                 elif vis_type == 'graph':
-                    # Graph visualization - need to reconstruct connectivity
                     # Get transition metal elements from clusters
                     tm_elements = set()
                     for cluster in clusters:
@@ -437,83 +369,79 @@ def visualize_command(args):
                         indices, 
                         material_id=data.get("material_id", ""), 
                         formula=data.get("formula", ""),
-                        use_3d=args.use_3d
+                        use_3d=use_3d
                     )
                     
-                    # Save graph visualization
-                    dim = "3d" if args.use_3d else "2d"
+                    dim = "3d" if use_3d else "2d"
                     png_file = f"{output_prefix}_graph_{dim}.png"
-                    fig.savefig(png_file, dpi=args.dpi)
-                    print(f"Saved graph visualization to {png_file}")
+                    fig.savefig(png_file, dpi=dpi)
+                    console.print(f"Saved graph visualization to {png_file}")
                     
-                    if args.show:
+                    if show:
                         plt.figure(fig.number)
                         plt.show(block=False)
                 
                 elif vis_type == 'lattice':
-                    # Lattice visualization - first need to get or create conventional structure
-                    # Check if we already have a conventional structure from previous analysis
                     conv_structure_file = f"{output_prefix}_conventional.cif"
                     try:
                         if os.path.exists(conv_structure_file):
                             conventional_structure = Structure.from_file(conv_structure_file)
-                            print(f"Using existing conventional structure from {conv_structure_file}")
+                            console.print(f"Using existing conventional structure from {conv_structure_file}")
                         else:
-                            # Generate conventional structure with clusters
                             conventional_structure, _, _ = generate_lattice_with_clusters(structure, clusters)
-                            print("Generated conventional structure with clusters")
+                            console.print("Generated conventional structure with clusters")
                         
-                        # Create lattice visualization
-                        fig = visualize_cluster_lattice(conventional_structure, rot=args.rotation)
-                        
-                        # Save lattice visualization
+                        fig = visualize_cluster_lattice(conventional_structure, rot=rotation)
                         png_file = f"{output_prefix}_lattice.png"
-                        fig.savefig(png_file, dpi=args.dpi)
-                        print(f"Saved lattice visualization to {png_file}")
+                        fig.savefig(png_file, dpi=dpi)
+                        console.print(f"Saved lattice visualization to {png_file}")
                         
-                        if args.show:
+                        if show:
                             plt.figure(fig.number)
                             plt.show(block=False)
                     
                     except Exception as e:
-                        print(f"Warning: Could not create lattice visualization: {e}")
-                        
+                        console.print(f"[yellow]Warning: Could not create lattice visualization: {e}[/yellow]")
+            
             except Exception as e:
-                print(f"Error creating {vis_type} visualization: {e}")
+                console.print(f"[red]Error creating {vis_type} visualization: {e}[/red]")
         
-        # Show all figures at once if requested and not already shown
-        if args.show:
+        # Show all figures at once if requested
+        if show:
             plt.show()
             
     except Exception as e:
-        print(f"Error in visualize command: {str(e)}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        console.print(f"[red]Error: {str(e)}[/red]")
+        raise typer.Exit(code=1)
 
-
-def batch_command(args):
-    """Execute batch processing of multiple structures."""
+@app.command("batch")
+def batch_command(
+    input_dir: str = typer.Argument(..., help="Directory containing structure files"),
+    pattern: str = typer.Option("*.cif", "--pattern", "-p", help="Glob pattern for input files"),
+    elements: Optional[List[str]] = typer.Option(None, "--elements", "-e", help="Elements to consider for clusters"),
+    radius: float = typer.Option(3.5, "--radius", "-r", help="Maximum atom-to-atom distance"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output directory")
+):
+    """Process multiple structure files."""
     try:
-        # Validate input directory
-        if not os.path.isdir(args.input_dir):
-            raise NotADirectoryError(f"Directory not found: {args.input_dir}")
+        if not os.path.isdir(input_dir):
+            raise NotADirectoryError(f"Directory not found: {input_dir}")
         
         # Create output directory
-        output_dir = args.output or os.path.join(args.input_dir, 'cluster_analysis')
+        output_dir = output or os.path.join(input_dir, 'cluster_analysis')
         os.makedirs(output_dir, exist_ok=True)
         
         # Process all matching files
         all_results = []
-        for file_path in Path(args.input_dir).glob(args.pattern):
-            print(f"\nProcessing {file_path}...")
+        for file_path in Path(input_dir).glob(pattern):
+            console.print(f"\nProcessing {file_path}...")
             
             try:
                 # Create args for find_command
                 find_args = argparse.Namespace(
                     structure_file=str(file_path),
-                    elements=args.elements,
-                    radius=args.radius,
+                    elements=elements,
+                    radius=radius,
                     min_size=2,
                     output=os.path.join(output_dir, file_path.stem),
                     no_vis=True,
@@ -521,7 +449,15 @@ def batch_command(args):
                 )
                 
                 # Run find command
-                find_command(find_args)
+                find_command(
+                    structure_file=find_args.structure_file,
+                    elements=find_args.elements,
+                    radius=find_args.radius,
+                    min_size=find_args.min_size,
+                    output=find_args.output,
+                    no_vis=find_args.no_vis,
+                    format=find_args.format
+                )
                 
                 # Load results for summary
                 with open(f"{find_args.output}_clusters.json") as f:
@@ -529,7 +465,7 @@ def batch_command(args):
                     all_results.append(result)
                     
             except Exception as e:
-                print(f"Error processing {file_path}: {e}")
+                console.print(f"[red]Error processing {file_path}: {e}[/red]")
                 continue
         
         # Generate summary
@@ -537,79 +473,74 @@ def batch_command(args):
             summary_file = os.path.join(output_dir, "batch_summary.txt")
             with open(summary_file, 'w') as f:
                 f.write(cluster_summary_stat(all_results, all_results))
-            print(f"\nSaved batch summary to {summary_file}")
+            console.print(f"\nSaved batch summary to {summary_file}")
             
     except Exception as e:
-        print(f"Error in batch command: {str(e)}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]Error: {str(e)}[/red]")
+        raise typer.Exit(code=1)
 
-
-def summary_command(args):
-    """Generate summary statistics for cluster data."""
+@app.command("summary")
+def summary_command(
+    input_file: str = typer.Argument(..., help="JSON or CSV file with cluster data"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file for summary"),
+    retrieve_missing: bool = typer.Option(False, "--retrieve-missing", help="Retrieve missing properties from Materials Project"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", "-k", help="Materials Project API key")
+):
+    """Generate summary statistics."""
     try:
-        # Validate input file
-        validate_input_file(args.input_file)
+        validate_input_file(input_file)
         
         # Load data based on file format
-        if args.input_file.lower().endswith('.json'):
-            with open(args.input_file) as f:
+        if input_file.lower().endswith('.json'):
+            with open(input_file) as f:
                 data = json.load(f)
                 compounds = [data] if isinstance(data, dict) else data
         else:  # CSV format
-            df = import_csv_data(args.input_file)
+            df = import_csv_data(input_file)
             compounds = df.to_dict('records')
         
         # Process compounds to ensure they have required fields
         processed_compounds = []
         for compound in compounds:
-            # Make a copy to avoid modifying the original
             processed = dict(compound)
             
             # Ensure material_id is present
             if "material_id" not in processed:
                 # Try to get it from the filename if JSON
-                if args.input_file.lower().endswith('.json'):
-                    base_name = os.path.basename(args.input_file)
+                if input_file.lower().endswith('.json'):
+                    base_name = os.path.basename(input_file)
                     # Check if filename follows mp-XXXXX pattern
                     mp_match = re.search(r'(mp-\d+)', base_name)
                     if mp_match:
                         processed["material_id"] = mp_match.group(1)
                     else:
-                        # Use the filename without extension as a fallback
                         processed["material_id"] = os.path.splitext(base_name)[0]
                 else:
-                    # Generate a generic ID
                     processed["material_id"] = f"material_{compounds.index(compound) + 1}"
             
             # Handle missing total_magnetization based on retrieve-missing flag
             if "total_magnetization" not in processed:
-                if args.retrieve_missing:
+                if retrieve_missing:
                     try:
-                        print(f"Retrieving total_magnetization for {processed['material_id']}...")
-                        # This is the key line that needed fixing - make sure we call get_mp_property
-                        # when retrieve_missing is True, regardless of material ID format
+                        console.print(f"Retrieving total_magnetization for {processed['material_id']}...")
                         processed["total_magnetization"] = get_mp_property(
                             processed["material_id"], 
                             "total_magnetization", 
-                            args.api_key
+                            api_key
                         )
-                        print(f"Retrieved total_magnetization: {processed['total_magnetization']}")
+                        console.print(f"Retrieved total_magnetization: {processed['total_magnetization']}")
                     except Exception as e:
-                        print(f"Warning: Could not retrieve total_magnetization for {processed['material_id']}: {e}")
-                        # Skip this compound if we can't retrieve the required property
+                        console.print(f"[yellow]Warning: Could not retrieve total_magnetization for {processed['material_id']}: {e}[/yellow]")
                         continue
                 else:
-                    # Skip this compound if missing required property and not retrieving
-                    print(f"Warning: Missing total_magnetization for {processed['material_id']} and retrieve-missing not enabled")
+                    console.print(f"[yellow]Warning: Missing total_magnetization for {processed['material_id']} and retrieve-missing not enabled[/yellow]")
                     continue
             
             # Process clusters if they exist but need conversion
             if "clusters" in processed and isinstance(processed["clusters"], list):
-                # Ensure clusters have all required fields
                 for cluster in processed["clusters"]:
                     if isinstance(cluster, dict):
                         if "size" not in cluster:
-                            # Try to determine size from sites if available
                             if "sites" in cluster and isinstance(cluster["sites"], list):
                                 cluster["size"] = len(cluster["sites"])
                             else:
@@ -618,101 +549,70 @@ def summary_command(args):
             processed_compounds.append(processed)
         
         if not processed_compounds:
-            print("Warning: No valid compounds to process after handling missing properties")
+            console.print("[yellow]Warning: No valid compounds to process after handling missing properties[/yellow]")
             return
         
-        # Generate summary using the processed compounds
+        # Generate summary
         summary = cluster_summary_stat(processed_compounds, processed_compounds)
         
         # Output summary
-        if args.output:
-            with open(args.output, 'w') as f:
+        if output:
+            with open(output, 'w') as f:
                 f.write(summary)
-            print(f"Saved summary to {args.output}")
+            console.print(f"Saved summary to {output}")
         else:
-            print(summary)
+            console.print(summary)
             
     except Exception as e:
-        print(f"Error in summary command: {str(e)}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        console.print(f"[red]Error: {str(e)}[/red]")
+        raise typer.Exit(code=1)
 
-
-def rank_command(args):
-    """Rank clusters based on geometry, symmetry, and stability (energy above hull)."""
+@app.command("rank")
+def rank_command(
+    input_file: str = typer.Argument(..., help="CSV file with cluster data"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file prefix for ranked data"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", "-k", help="Materials Project API key"),
+    top: Optional[int] = typer.Option(None, "--top", "-n", help="Show only top N ranked clusters"),
+    format: str = typer.Option("csv", "--format", "-f", help="Output format: csv, json, or both"),
+    custom_props: Optional[List[str]] = typer.Option(None, "--custom-props", help="Custom properties for ranking"),
+    prop_weights: Optional[List[str]] = typer.Option(None, "--prop-weights", help="Weights for custom properties (format: prop:weight)"),
+    no_default_ranking: bool = typer.Option(False, "--no-default-ranking", help="Disable default ranking criteria")
+):
+    """Rank clusters based on geometry, symmetry, and stability."""
     try:
-        # Validate input file
-        validate_input_file(args.input_file, '.csv')
+        validate_input_file(input_file)
         
-        print(f"\nRanking clusters from {args.input_file}...")
+        # Load data
+        df = import_csv_data(input_file)
         
-        # Parse custom property weights if provided
-        prop_weights = None
-        if args.prop_weights:
-            prop_weights = {}
-            for weight_str in args.prop_weights:
-                if ':' in weight_str:
-                    prop_name, weight = weight_str.split(':')
-                    try:
-                        prop_weights[prop_name] = float(weight)
-                    except ValueError:
-                        print(f"Warning: Invalid weight format for {prop_name}: {weight}. Using default weight.")
+        # Parse property weights if provided
+        custom_weights = {}
+        if prop_weights:
+            for weight_str in prop_weights:
+                prop, weight = weight_str.split(':')
+                custom_weights[prop] = float(weight)
         
-        print("This may take some time if retrieving data from the Materials Project API.")
-        
-        # Rank the clusters with the enhanced capabilities
+        # Rank clusters
         ranked_df = rank_clusters(
-            data_source=args.input_file,
-            api_key=args.api_key,
-            custom_props=args.custom_props,
-            prop_weights=prop_weights,
-            include_default_ranking=not args.no_default_ranking
+            df,
+            custom_props=custom_props,
+            prop_weights=custom_weights if custom_weights else None,
+            top_n=top,
+            include_default_ranking=not no_default_ranking
         )
         
-        # Limit to top N if specified
-        if args.top and args.top > 0:
-            ranked_df = ranked_df.head(args.top)
+        # Save results if output path provided
+        if output:
+            if format in ['csv', 'both']:
+                export_csv_data(ranked_df, f"{output}_ranked.csv")
+                console.print(f"Saved ranked data to {output}_ranked.csv")
+                
+            if format in ['json', 'both']:
+                with open(f"{output}_ranked.json", 'w') as f:
+                    json.dump(ranked_df.to_dict('records'), f, indent=2)
+                console.print(f"Saved ranked data to {output}_ranked.json")
         
-        # Determine output prefix
-        output_prefix = args.output or os.path.splitext(os.path.basename(args.input_file))[0] + "_ranked"
-        
-        # Save results
-        if args.format in ['csv', 'both']:
-            csv_file = f"{output_prefix}_clusters.csv"
-            export_csv_data(ranked_df, csv_file)
-            print(f"Saved ranked data to {csv_file}")
-        
-        if args.format in ['json', 'both']:
-            json_file = f"{output_prefix}_clusters.json"
-            with open(json_file, 'w') as f:
-                # Convert DataFrame to dict for JSON serialization, handling potential non-serializable objects
-                json_data = []
-                for _, row in ranked_df.iterrows():
-                    row_dict = {col: row[col] for col in ranked_df.columns if not isinstance(row[col], (np.ndarray, list))}
-                    # Convert special types
-                    for col in ranked_df.columns:
-                        if isinstance(row[col], np.ndarray):
-                            row_dict[col] = row[col].tolist()
-                        elif isinstance(row[col], list) and col != 'average_distance':
-                            row_dict[col] = str(row[col])
-                    json_data.append(row_dict)
-                json.dump(json_data, f, indent=2)
-            print(f"Saved ranked data to {json_file}")
-        
-        # Display summary of ranking
-        print(f"\nRanked {len(ranked_df)} clusters based on:")
-        if not args.no_default_ranking:
-            print("- Geometric properties (minimum average distance)")
-            print("- Symmetry (point group and space group order)")
-            print("- Stability (energy above hull)")
-        
-        # Show custom properties if any
-        if args.custom_props:
-            print("- Custom properties:", ", ".join(args.custom_props))
-        
-        # Show top 5 ranked clusters
-        print("\nTop ranked clusters:")
+        # Display top results
         display_columns = ['material_id', 'formula', 'rank_score']
         if 'energy_above_hull' in ranked_df.columns:
             display_columns.append('energy_above_hull')
@@ -722,118 +622,257 @@ def rank_command(args):
             display_columns.append('max_point_group_order')
         
         # Add custom properties to display columns
-        if args.custom_props:
-            for prop in args.custom_props:
+        if custom_props:
+            for prop in custom_props:
                 if prop in ranked_df.columns:
                     display_columns.append(prop)
         
         with pd.option_context('display.max_rows', 5, 'display.max_columns', None):
-            print(ranked_df[display_columns].head(5))
+            console.print(ranked_df[display_columns].head(5))
         
     except Exception as e:
-        print(f"Error in rank command: {str(e)}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        console.print(f"[red]Error: {str(e)}[/red]")
+        raise typer.Exit(code=1)
 
-
-def get_material_command(args):
-    """Execute the get-material command to retrieve a structure from Materials Project."""
+@app.command("get-material")
+def get_material_command(
+    material_id: str = typer.Argument(..., help="Materials Project ID (e.g., mp-149)"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (default: material_id.cif)"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", "-k", help="Materials Project API key"),
+    conventional: bool = typer.Option(False, "--conventional", help="Export conventional cell instead of primitive cell"),
+    no_analysis: bool = typer.Option(False, "--no-analysis", help="Skip structure analysis information")
+):
+    """Get a material from Materials Project by ID and export as CIF."""
     try:
-        print(f"\nRetrieving material {args.material_id} from Materials Project...")
+        console.print(f"\nRetrieving material {material_id} from Materials Project...")
         
-        # Initialize MPRester with the provided API key or from environment variable
-        with MPRester(args.api_key) as mpr:
+        with MPRester(api_key) as mpr:
             try:
-                # Get the structure from Materials Project
-                structure = mpr.get_structure_by_material_id(args.material_id)
+                structure = mpr.get_structure_by_material_id(material_id)
                 
                 # Convert to conventional cell if requested
-                if args.conventional:
+                if conventional:
                     analyzer = SpacegroupAnalyzer(structure)
                     structure = analyzer.get_conventional_standard_structure()
-                    print(f"Retrieved conventional structure for {args.material_id}")
+                    console.print(f"Retrieved conventional structure for {material_id}")
                 else:
-                    print(f"Retrieved primitive structure for {args.material_id}")
+                    console.print(f"Retrieved primitive structure for {material_id}")
                 
                 # Determine output path
-                output_path = args.output or f"{args.material_id}.cif"
+                output_path = output or f"{material_id}.cif"
                 
                 # Export structure to CIF
                 export_structure_to_cif(structure, output_path)
-                print(f"Structure exported to {output_path}")
+                console.print(f"Structure exported to {output_path}")
                 
                 # Display structure analysis information
-                if not args.no_analysis:
+                if not no_analysis:
                     analyzer = SpacegroupAnalyzer(structure)
                     space_group = analyzer.get_space_group_symbol()
                     point_group = analyzer.get_point_group_symbol()
                     formula = structure.composition.reduced_formula
                     
-                    print("\nStructure Information:")
-                    print(f"Formula: {formula}")
-                    print(f"Space Group: {space_group}")
-                    print(f"Point Group: {point_group}")
-                    print(f"Number of Sites: {len(structure)}")
-                    print(f"Elements: {', '.join(sorted([str(e) for e in structure.composition.elements]))}")
+                    console.print("\nStructure Information:")
+                    console.print(f"Formula: {formula}")
+                    console.print(f"Space Group: {space_group}")
+                    console.print(f"Point Group: {point_group}")
+                    console.print(f"Number of Sites: {len(structure)}")
+                    console.print(f"Elements: {', '.join(sorted([str(e) for e in structure.composition.elements]))}")
                     
-                    # Try to get additional properties if available
                     try:
-                        energy_above_hull = get_mp_property(args.material_id, 'energy_above_hull', args.api_key)
-                        formation_energy = get_mp_property(args.material_id, 'formation_energy_per_atom', args.api_key)
-                        band_gap = get_mp_property(args.material_id, 'band_gap', args.api_key)
+                        energy_above_hull = get_mp_property(material_id, 'energy_above_hull', api_key)
+                        formation_energy = get_mp_property(material_id, 'formation_energy_per_atom', api_key)
+                        band_gap = get_mp_property(material_id, 'band_gap', api_key)
                         
-                        print("\nMaterial Properties:")
-                        print(f"Energy Above Hull: {energy_above_hull:.4f} eV/atom")
-                        print(f"Formation Energy: {formation_energy:.4f} eV/atom")
-                        print(f"Band Gap: {band_gap:.4f} eV")
-                    except Exception as e:
-                        # Not all properties may be available, so we'll just ignore any errors
+                        console.print("\nMaterial Properties:")
+                        console.print(f"Energy Above Hull: {energy_above_hull:.4f} eV/atom")
+                        console.print(f"Formation Energy: {formation_energy:.4f} eV/atom")
+                        console.print(f"Band Gap: {band_gap:.4f} eV")
+                    except Exception:
                         pass
             
             except Exception as e:
-                print(f"Error retrieving structure: {str(e)}", file=sys.stderr)
-                print("Make sure you have a valid Materials Project API key set as MAPI_KEY environment variable "
-                      "or provided through the --api-key argument.", file=sys.stderr)
-                sys.exit(1)
+                console.print(f"[red]Error retrieving structure: {str(e)}[/red]")
+                console.print("[yellow]Make sure you have a valid Materials Project API key set as MAPI_KEY environment variable "
+                              "or provided through the --api-key argument.[/yellow]")
+                raise typer.Exit(code=1)
                 
     except Exception as e:
-        print(f"Error in get_material command: {str(e)}", file=sys.stderr)
-        sys.exit(1)
+        console.print(f"[red]Error: {str(e)}[/red]")
+        raise typer.Exit(code=1)
 
+@app.command("version")
+def version():
+    """Show the version of cluster_finder."""
+    try:
+        import pkg_resources
+        version = pkg_resources.get_distribution("cluster_finder").version
+        console.print(f"[bold green]Cluster Finder version: {version}[/bold green]")
+    except Exception:
+        console.print("[yellow]Could not determine Cluster Finder version[/yellow]")
+
+# Advanced analysis commands
+@analyze_app.command("batch")
+def advanced_batch_analysis(
+    api_key: Optional[str] = typer.Option(None, "--api-key", "-k", help="Materials Project API key"),
+    output_dir: Path = typer.Option("results", "--output-dir", "-o", help="Directory to save outputs"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to configuration file"),
+    tms: Optional[List[str]] = typer.Option(None, "--tms", help="Specific transition metals to analyze (comma-separated list)", callback=lambda x: x[0].split(',') if x else None),
+    anions: Optional[List[str]] = typer.Option(None, "--anions", help="Specific anions to analyze (comma-separated list)", callback=lambda x: x[0].split(',') if x else None),
+    max_workers: int = typer.Option(4, "--max-workers", "-w", help="Maximum number of parallel system analyses"),
+    save_pdf: bool = typer.Option(True, "--no-pdf", help="Do not save PDF reports"),
+    save_csv: bool = typer.Option(True, "--no-csv", help="Do not save CSV files"),
+    n_jobs: int = typer.Option(1, "--n-jobs", "-j", help="Number of parallel jobs"),
+    show_systems: bool = typer.Option(False, "--show-systems", help="Only show the systems that would be analyzed without running"),
+    summary_only: bool = typer.Option(False, "--summary-only", help="Only show the summary table, not individual system results"),
+    retry_failed: bool = typer.Option(False, "--retry-failed", help="Retry previously failed systems from a batch run"),
+    load_summary: Optional[str] = typer.Option(None, "--load-summary", help="Path to a previous batch_summary.json to continue from"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress and debug information")
+):
+    """Run advanced batch analysis with additional options for parallel processing."""
+    try:
+        from cluster_finder.utils.logger import setup_logging
+        
+        # Configure logging based on verbose flag
+        setup_logging(verbose=verbose)
+
+        # Load configuration
+        config_dict = load_config(config) if config else None
+
+        # Handle previous results if retrying
+        previous_results = {}
+        if load_summary and retry_failed:
+            try:
+                with open(load_summary, 'r') as f:
+                    previous_summary = json.load(f)
+                    previous_results = previous_summary.get("results", {})
+                console.print(f"[bold blue]Loaded previous summary from {load_summary}[/bold blue]")
+            except Exception as e:
+                console.print(f"[bold red]Error loading previous summary: {e}[/bold red]")
+
+        # Update config with specific elements if provided
+        if tms or anions:
+            if config_dict is None:
+                config_dict = {}
+            if tms:
+                config_dict['transition_metals'] = tms
+            if anions:
+                config_dict['anions'] = anions
+
+        # Get systems to analyze
+        systems = get_element_combinations(config_dict)
+
+        if not systems:
+            console.print("[red]Error: No valid systems to analyze. Please check your TM and anion selections.[/red]")
+            raise typer.Exit(code=1)
+
+        # Filter failed systems if retrying
+        if retry_failed and previous_results:
+            failed_systems = []
+            for system_name, result in previous_results.items():
+                if result.get("status") == "error":
+                    elements = system_name.split("-")
+                    if len(elements) == 2:
+                        failed_systems.append(elements)
+            if failed_systems:
+                systems = failed_systems
+                console.print(f"[bold yellow]Will retry {len(systems)} failed systems[/bold yellow]")
+            else:
+                console.print("[bold yellow]No failed systems found to retry[/bold yellow]")
+
+        # Show systems to analyze
+        console.print(f"[bold green]Preparing analysis for {len(systems)} TM-anion systems[/bold green]")
+
+        table = Table(title="Systems to Analyze")
+        table.add_column("System", style="cyan")
+        table.add_column("Transition Metal", style="green")
+        table.add_column("Anion", style="yellow")
+
+        for system in systems:
+            table.add_row(f"{system[0]}-{system[1]}", system[0], system[1])
+
+        console.print(table)
+
+        if show_systems:
+            console.print("[yellow]This was a dry run. Use without --show-systems to execute analysis.[/yellow]")
+            return
+
+        # Run batch analysis
+        result = run_batch_analysis(
+            api_key=api_key,
+            output_dir=output_dir,
+            config_path=config,
+            specific_tms=tms,
+            specific_anions=anions,
+            max_workers=max_workers,
+            save_pdf=save_pdf,
+            save_csv=save_csv,
+            n_jobs_per_analysis=n_jobs
+        )
+
+        # Print results
+        if summary_only:
+            console.print("[bold green]Batch Analysis Summary[/bold green]")
+            summary_table = Table(title="Analysis Results")
+            summary_table.add_column("Parameter", style="cyan")
+            summary_table.add_column("Value", style="green")
+
+            summary_table.add_row("Total Systems", str(len(systems)))
+            summary_table.add_row("Completed Systems", str(result.get("completed_systems", 0)))
+            summary_table.add_row("Failed Systems", str(result.get("failed_systems", 0)))
+            summary_table.add_row("Total Time (seconds)", f"{result.get('total_time_seconds', 0):.2f}")
+            summary_table.add_row("Output Directory", str(output_dir))
+
+            console.print(summary_table)
+            return
+
+        # Show detailed results if not summary only
+        results_table = Table(title="System-Specific Results")
+        results_table.add_column("System", style="cyan")
+        results_table.add_column("Status", style="green")
+        results_table.add_column("Compounds", style="yellow")
+        results_table.add_column("With Clusters", style="yellow")
+        results_table.add_column("Time (s)", style="blue")
+
+        for system_name, system_result in result.get("results", {}).items():
+            status = system_result.get("status", "unknown")
+            status_style = "green" if status == "completed" else "red"
+
+            results_table.add_row(
+                system_name,
+                f"[{status_style}]{status}[/{status_style}]",
+                str(system_result.get("compounds_count", "N/A")),
+                str(system_result.get("compounds_with_clusters_count", "N/A")),
+                f"{system_result.get('time_taken', 0):.2f}"
+            )
+
+        console.print(results_table)
+
+    except Exception as e:
+        console.print(f"[bold red]Error: {str(e)}[/bold red]")
+        raise typer.Exit(code=1)
+
+@analyze_app.command("config")
+def show_config(
+    config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Path to configuration file"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file to save the configuration")
+):
+    """Display or export the current configuration."""
+    try:
+        config = load_config(config_path) if config_path else {}
+        
+        if output:
+            with open(output, 'w') as f:
+                json.dump(config, f, indent=2)
+            console.print(f"[green]Configuration saved to {output}[/green]")
+        else:
+            console.print("[bold]Current Configuration:[/bold]")
+            console.print(json.dumps(config, indent=2))
+
+    except Exception as e:
+        console.print(f"[red]Error: {str(e)}[/red]")
+        raise typer.Exit(code=1)
 
 def main():
     """Main entry point for the command-line interface."""
-    parser = get_parser()
-    args = parser.parse_args()
-    
-    if not args.command:
-        parser.print_help()
-        sys.exit(1)
-    
-    # Execute the appropriate command
-    try:
-        if args.command == 'find':
-            find_command(args)
-        elif args.command == 'analyze':
-            analyze_command(args)
-        elif args.command == 'visualize':
-            visualize_command(args)
-        elif args.command == 'batch':
-            batch_command(args)
-        elif args.command == 'summary':
-            summary_command(args)
-        elif args.command == 'rank':
-            rank_command(args)
-        elif args.command == 'get-material':
-            get_material_command(args)
-        else:
-            parser.print_help()
-            sys.exit(1)
-    except Exception as e:
-        print(f"Error: {str(e)}", file=sys.stderr)
-        sys.exit(1)
-
-
-if __name__ == '__main__':
-    main()
+    app()

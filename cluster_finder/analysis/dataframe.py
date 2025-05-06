@@ -7,6 +7,7 @@ This module contains functions for creating and manipulating dataframes from clu
 import pandas as pd
 import os
 import ast
+import numpy as np
 from pymatgen.core.structure import Structure
 from pymatgen.core.sites import PeriodicSite
 from ..core.structure import generate_lattice_with_clusters, generate_supercell
@@ -102,45 +103,65 @@ def postprocessed_clusters_dataframe(data_source):
     else:
         raise TypeError("data_source must be either a file path (str) or a pandas DataFrame")
     
-    records = []
-    for _, row in df.iterrows():
-        compound_system = row['compound_system']
-        material_id = row['material_id']
-        formula = row['formula']
-        magnetization = row['magnetization']
-        num_clusters = row['num_clusters']
-        
-        # Handle both string and list inputs for cluster_sizes and average_distance
-        cluster_sizes = row['cluster_sizes']
-        average_distance = row['average_distance']
-        if isinstance(cluster_sizes, str):
-            cluster_sizes = ast.literal_eval(cluster_sizes)
-        if isinstance(average_distance, str):
-            average_distance = ast.literal_eval(average_distance)
-        
-        # Handle both string and dictionary inputs for structure
-        structure_data = row['structure']
+    # Vectorized string-to-literal conversion for list columns
+    list_columns = ["cluster_sizes", "average_distance"]
+    for col in list_columns:
+        if col in df.columns:
+            # Use pandas.Series.apply with vectorized conditional
+            df[col] = df[col].apply(
+                lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+            )
+    
+    # Process structure data in a more efficient way
+    def process_structure(structure_data):
         if isinstance(structure_data, str):
             try:
-                structure_data = ast.literal_eval(structure_data)
+                return ast.literal_eval(structure_data)
             except:
-                structure = Structure.from_str(structure_data, fmt="json")
+                return Structure.from_str(structure_data, fmt="json")
+        return structure_data
+    
+    # Process structure column
+    if "structure" in df.columns:
+        df["structure_processed"] = df["structure"].apply(process_structure)
         
-        # Convert dictionary to Structure object
+    # Process cluster_sites data
+    if "cluster_sites" in df.columns:
+        df["cluster_sites_processed"] = df["cluster_sites"].apply(
+            lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+        )
+    
+    # Unfortunately, the subsequent operations with generating lattices and classifying
+    # dimensionality need to be done per-row since they involve complex PyMatGen operations.
+    # Here we'll still use a row-wise operation but optimize the inner work.
+    records = []
+    
+    for _, row in df.iterrows():
+        # Get basic data
+        compound_system = row.get('compound_system')
+        material_id = row.get('material_id')
+        formula = row.get('formula')
+        magnetization = row.get('magnetization')
+        num_clusters = row.get('num_clusters')
+        
+        # Get processed data
+        cluster_sizes = row.get('cluster_sizes')
+        average_distance = row.get('average_distance')
+        structure_data = row.get('structure_processed', row.get('structure'))
+        cluster_sites_data = row.get('cluster_sites_processed', row.get('cluster_sites'))
+        
+        # Convert structure to Structure object if it's a dict
         if isinstance(structure_data, dict):
             structure = Structure.from_dict(structure_data)
         else:
             structure = structure_data
         
-        cluster_sites_data = row['cluster_sites']
-        if isinstance(cluster_sites_data, str):
-            cluster_sites = ast.literal_eval(cluster_sites_data)
-        else:
-            cluster_sites = cluster_sites_data
-        
+        # Generate clusters with optimized site creation
         clusters = []
-        for i, (size, avg_dist, sites) in enumerate(zip(cluster_sizes, average_distance, cluster_sites)):
+        for i, (size, avg_dist, sites) in enumerate(zip(cluster_sizes, average_distance, cluster_sites_data)):
+            # Create all site objects at once
             sites_objects = [PeriodicSite.from_dict(site) for site in sites]
+            
             clusters.append({
                 'size': size,
                 'average_distance': avg_dist,
@@ -148,6 +169,7 @@ def postprocessed_clusters_dataframe(data_source):
                 'label': f'X{i}'  # Add a unique label for each cluster
             })
         
+        # These operations can't be easily vectorized due to PyMatGen dependencies
         conventional_structure, space_group, point_groups = generate_lattice_with_clusters(structure, clusters)
         supercell_structure = generate_supercell(conventional_structure, (20, 20, 20))
         predicted_dimentionality, norm_svals = classify_dimensionality(supercell_structure)
@@ -165,8 +187,15 @@ def postprocessed_clusters_dataframe(data_source):
             "predicted_dimentionality": predicted_dimentionality,
             "norm_svals": norm_svals,
             "conventional_cluster_lattice": conventional_structure.to(fmt="json"),
-            "cluster_sites": cluster_sites,
+            "cluster_sites": cluster_sites_data,
         }
         records.append(record)
+    
+    # Drop temporary columns
+    if "structure_processed" in df.columns:
+        df = df.drop(columns=["structure_processed"])
+    if "cluster_sites_processed" in df.columns:
+        df = df.drop(columns=["cluster_sites_processed"])
+    
     new_df = pd.DataFrame(records)
     return new_df
