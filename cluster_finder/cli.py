@@ -17,6 +17,16 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from mp_api.client import MPRester
 import matplotlib.pyplot as plt
 
+# Add check for LZMA support early in the CLI
+try:
+    import lzma
+except ImportError:
+    from rich.console import Console
+    console = Console()
+    console.print("\n[bold yellow]⚠️  Warning: Python LZMA support is missing![/bold yellow]")
+    console.print("[yellow]This may cause errors when using compression features required by dependencies like pymatgen.[/yellow]")
+    console.print("[yellow]See installation instructions for fixing this issue in the documentation or setup.py.[/yellow]\n")
+
 try:
     import typer
     from rich.console import Console

@@ -11,6 +11,10 @@ from pymatgen.core.structure import Structure
 import networkx as nx
 import ast
 import time
+import io
+import sys
+import re
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Union, Tuple
 import logging
@@ -21,7 +25,7 @@ from cluster_finder.utils.helpers import (
     get_transition_metals,
     get_mp_properties_batch
 )
-from cluster_finder.utils.logger import get_logger, setup_logging
+from cluster_finder.utils.logger import get_logger, setup_logging, console
 from cluster_finder.core.clusters import get_compounds_with_clusters
 from cluster_finder.core.structure import (
     generate_lattice_with_clusters,
@@ -207,6 +211,7 @@ def run_analysis(
     # 5. Rank clusters using the existing rank_clusters function
     logger.info("Ranking clusters...")
     try:
+        # Call rank_clusters directly - it now uses proper logging
         ranked_df = rank_clusters(
             data_source=processed_df,
             api_key=api_key,

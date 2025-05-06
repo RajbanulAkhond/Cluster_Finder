@@ -13,6 +13,15 @@ matplotlib.use('Agg')  # Use non-interactive backend
 
 __version__ = "0.1.0"
 
+# Check system dependencies
+try:
+    from .utils.system_compat import check_dependency_support
+    # Run system checks but don't be verbose on import - just issue warnings if needed
+    check_dependency_support(verbose=True)
+except ImportError:
+    # The utils module might not be available during initial installation
+    pass
+
 # Import core functionality
 from .core.structure import (
     find_non_equivalent_positions,

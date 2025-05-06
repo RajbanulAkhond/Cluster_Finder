@@ -8,6 +8,7 @@ from typing import Optional
 from rich.logging import RichHandler
 from rich.console import Console
 
+# Create console
 console = Console()
 
 def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> None:
@@ -30,10 +31,6 @@ def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> None
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
     
-    # Rich handler format - simpler format for non-verbose mode
-    rich_format = "%(message)s" if verbose else "[%(levelname)s] %(message)s"
-    file_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    
     # Set console quiet mode based on verbose flag
     console.quiet = not verbose
     
@@ -54,7 +51,6 @@ def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> None
         omit_repeated_times=True
     )
     console_handler.setLevel(level)
-    console_handler.setFormatter(logging.Formatter(rich_format))
     root_logger.addHandler(console_handler)
     
     # File handler if specified (this will always have detailed logs)
@@ -62,7 +58,7 @@ def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> None
         os.makedirs(os.path.dirname(log_file) or '.', exist_ok=True)
         file_handler = logging.FileHandler(log_file)
         file_handler.setLevel(logging.DEBUG)  # Always keep detailed logs in file
-        file_handler.setFormatter(logging.Formatter(file_format))
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         root_logger.addHandler(file_handler)
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
