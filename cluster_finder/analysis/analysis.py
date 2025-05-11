@@ -8,6 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from pymatgen.core.structure import Structure
+from pymatgen.core.sites import PeriodicSite
 import networkx as nx
 import ast
 import time
@@ -67,6 +68,157 @@ def setup_analysis_logger(log_dir: Path, system_name: str) -> None:
     
     return logger
 
+def cleanup_joblib_resources():
+    """
+    Clean up joblib and multiprocessing resources to prevent leaked resources.
+    
+    This function performs cleanup of:
+    - Temporary folders created by joblib
+    - Semaphores and other resources tracked by multiprocessing
+    - Forces garbage collection to release memory
+    """
+    logger = get_logger()
+    try:
+        # Clean up temporary joblib memmapping folders
+        import tempfile
+        import shutil
+        import glob
+        
+        # Find and clean up any joblib temp folders in the system temp directory
+        tmp_pattern = os.path.join(tempfile.gettempdir(), "joblib_memmapping_folder_*")
+        for folder in glob.glob(tmp_pattern):
+            try:
+                if os.path.exists(folder):
+                    logger.debug(f"Cleaning up joblib temporary folder: {folder}")
+                    shutil.rmtree(folder, ignore_errors=True)
+            except Exception as e:
+                logger.debug(f"Failed to clean up folder {folder}: {e}")
+        
+        # Release any semaphores or other resources that might be held
+        # This helps with the "leaked semlock objects" warnings
+        try:
+            # Try to access the semaphore tracker in a version-agnostic way
+            import multiprocessing as mp
+            if hasattr(mp, '_cleanup'):
+                mp._cleanup()
+                
+            # For newer Python versions
+            if hasattr(mp, 'resource_tracker') and hasattr(mp.resource_tracker, '_resource_tracker'):
+                tracker = mp.resource_tracker._resource_tracker
+                if tracker is not None and hasattr(tracker, 'ensure_running'):
+                    tracker.ensure_running()
+        except (ImportError, AttributeError):
+            pass
+        
+        # Force Python garbage collection to release resources
+        import gc
+        gc.collect()
+        
+    except Exception as cleanup_err:
+        logger.debug(f"Error during joblib resource cleanup: {cleanup_err}")
+
+def process_compound_visualization(idx, row_data, logger):
+    """Process visualization data for a single compound."""
+    try:
+        material_id = row_data['material_id']
+        formula = row_data['formula']
+        logger.info(f"Processing visualization data for {formula} ({material_id})")
+        
+        # Convert the structure data to a Structure object
+        structure_data = row_data['structure']
+        if isinstance(structure_data, dict):
+            structure = Structure.from_dict(structure_data)
+        elif isinstance(structure_data, str):
+            try:
+                # Try to parse as JSON string
+                import json
+                structure_dict = json.loads(structure_data)
+                structure = Structure.from_dict(structure_dict)
+            except json.JSONDecodeError:
+                try:
+                    # Fallback to ast.literal_eval
+                    structure_dict = ast.literal_eval(structure_data)
+                    structure = Structure.from_dict(structure_dict)
+                except:
+                    # Last resort - try as JSON string
+                    structure = Structure.from_str(structure_data, fmt="json")
+        else:
+            structure = structure_data
+        
+        # Get cluster data
+        clusters = []
+        cluster_sites_data = row_data['cluster_sites']
+        cluster_sizes = row_data['cluster_sizes']
+        average_distance = row_data['average_distance']
+        
+        # Handle string data that needs to be evaluated
+        if isinstance(cluster_sites_data, str):
+            cluster_sites_data = ast.literal_eval(cluster_sites_data)
+        if isinstance(cluster_sizes, str):
+            cluster_sizes = ast.literal_eval(cluster_sizes)
+        if isinstance(average_distance, str):
+            average_distance = ast.literal_eval(average_distance)
+        
+        # Reconstruct clusters list
+        for i, (size, avg_dist, sites) in enumerate(zip(cluster_sizes, average_distance, cluster_sites_data)):
+            # Convert site dictionaries to Site objects
+            sites_objects = [PeriodicSite.from_dict(site) for site in sites]
+            clusters.append({
+                'size': size,
+                'average_distance': avg_dist,
+                'sites': sites_objects,
+                'label': f'X{i}'
+            })
+        
+        # Get graph data if available
+        graph = None
+        if 'graph' in row_data:
+            graph = row_data['graph']
+        
+        # Get transition metal indices for visualization
+        transition_metals = get_transition_metals()
+        tm_indices = [i for i, site in enumerate(structure) 
+                    if site.specie.symbol in transition_metals]
+        
+        # Generate visualization data
+        visualization_data = {
+            "structure": structure,
+            "clusters": clusters,
+            "graph": graph,
+            "formula": formula,
+            "space_group": row_data['space_group'],
+            "point_groups": row_data['point_groups'],
+            "dimensionality": row_data['predicted_dimentionality'],
+            "energy_above_hull": row_data.get('energy_above_hull'),
+            "formation_energy_per_atom": row_data.get('formation_energy_per_atom'),
+            "rank_score": row_data.get('rank_score'),
+            "tm_indices": tm_indices
+        }
+        
+        # Generate lattice structure
+        try:
+            lattice_structure, space_group, _ = generate_lattice_with_clusters(structure, clusters)
+            visualization_data["lattice_structure"] = lattice_structure
+            visualization_data["space_group"] = space_group
+            
+            # Generate supercell for dimensionality analysis
+            supercell = generate_supercell(lattice_structure, supercell_matrix=(10, 10, 10))
+            visualization_data["supercell"] = supercell
+            
+            # Get singular values for dimensionality visualization
+            _, singular_values = classify_dimensionality(supercell)
+            visualization_data["singular_values"] = singular_values
+            
+        except Exception as e:
+            logger.warning(f"Error processing supercell for {material_id}: {e}")
+        
+        logger.info(f"Completed visualization data processing for {formula}")
+        return material_id, visualization_data
+        
+    except Exception as e:
+        logger.error(f"Error processing structure data for {material_id}: {e}")
+        return material_id, None
+
 def run_analysis(
     primary_tm: str,
     anion: str,
@@ -75,37 +227,43 @@ def run_analysis(
     config: Optional[Dict[str, Any]] = None,
     n_jobs: int = 1,
     save_pdf: bool = True,
-    save_csv: bool = True
+    save_csv: bool = True,
+    verbose: bool = False
 ) -> Dict[str, Any]:
     """
-    Run the cluster analysis for a specific transition metal - anion pair.
+    Run analysis for a single TM-anion system.
     
     Args:
-        primary_tm: Primary transition metal element (e.g., 'Nb')
-        anion: Anion element (e.g., 'Cl')
+        primary_tm: Primary transition metal
+        anion: Anion element
         api_key: Materials Project API key
-        output_dir: Directory to save the output files
-        config: Configuration dictionary (if None, will load from default config file)
-        n_jobs: Number of parallel jobs for processing clusters
-        save_pdf: Whether to save PDF report
-        save_csv: Whether to save CSV data
+        output_dir: Base directory for outputs
+        config: Configuration dictionary (optional)
+        n_jobs: Number of parallel jobs (default: 1)
+        save_pdf: Whether to save PDF report (default: True)
+        save_csv: Whether to save CSV data (default: True)
+        verbose: Show detailed logging information (default: False)
         
     Returns:
-        Dictionary containing summary data about the analysis run
+        Dictionary containing analysis results and metadata
     """
-    # Load config if not provided
-    if config is None:
-        config = load_config()
-    
+    if not config:
+        config = {}
+
     # Create system name and output directory
     system_name = f"{primary_tm}-{anion}"
     system_dir = output_dir / system_name
     system_dir.mkdir(parents=True, exist_ok=True)
     
-    # Set up logger
+    # Set up logger with proper verbosity
     setup_analysis_logger(system_dir, system_name)
     logger = get_logger()
+    logger.setLevel(logging.INFO if verbose else logging.ERROR)
     logger.info(f"Starting analysis for {system_name} system")
+    
+    # Load config if not provided
+    if config is None:
+        config = load_config()
     
     # Get filter parameters from config
     element_filters = config.get('element_filters', {})
@@ -240,156 +398,47 @@ def run_analysis(
     top_n = analysis_params.get('top_n_compounds', 10)
     top_compounds = ranked_df.head(top_n)
     
-    logger.info(f"Processing data for visualization (top {top_n} compounds)...")
+    # Only process visualization data if we're saving PDF reports
     processed_data = {}
-    
-    # Import joblib for parallel processing
-    try:
-        from joblib import Parallel, delayed
+    if save_pdf:
+        logger.info(f"Processing data for visualization (top {top_n} compounds)...")
         
-        # Define the function to process a single compound
-        def process_compound_visualization(idx, row_data, logger):
-            """Process visualization data for a single compound."""
-            try:
-                # Convert row to Series to avoid tuple indexing issue
-                if not isinstance(row_data, pd.Series):
-                    row_data = pd.Series(row_data)
-                
-                material_id = row_data['material_id']
-                # Only log at debug level for individual compound processing
-                logger.debug(f"Processing visualization data for {material_id}")
-                
-                # Get the compound data from compounds_df for correct structure and clusters
-                compound_data = compounds_df[compounds_df['material_id'] == material_id]
-                if compound_data.empty:
-                    logger.warning(f"Could not find compound data for {material_id}")
-                    return material_id, None
-                
-                # Extract structure data
-                structure_data = compound_data.iloc[0]['structure']
-                
-                # Convert structure if needed
-                if isinstance(structure_data, dict):
-                    structure = Structure.from_dict(structure_data)
-                elif isinstance(structure_data, str):
-                    try:
-                        # Try to parse as JSON string
-                        import json
-                        structure_dict = json.loads(structure_data)
-                        structure = Structure.from_dict(structure_dict)
-                    except json.JSONDecodeError:
-                        try:
-                            # Fallback to ast.literal_eval
-                            structure_dict = ast.literal_eval(structure_data)
-                            structure = Structure.from_dict(structure_dict)
-                        except:
-                            # Last resort - try as JSON string
-                            structure = Structure.from_str(structure_data, fmt="json")
-                else:
-                    structure = structure_data
-                
-                # Get cluster data
-                clusters = []
-                
-                # Directly use cluster_sites and related data from the row
-                cluster_sites_data = row_data['cluster_sites']
-                cluster_sizes = row_data['cluster_sizes']
-                average_distance = row_data['average_distance']
-                
-                # Handle different types of data (string vs. list)
-                if isinstance(cluster_sites_data, str):
-                    cluster_sites_data = ast.literal_eval(cluster_sites_data)
-                if isinstance(cluster_sizes, str):
-                    cluster_sizes = ast.literal_eval(cluster_sizes)
-                if isinstance(average_distance, str):
-                    average_distance = ast.literal_eval(average_distance)
-                
-                # Reconstruct clusters list
-                clusters = []
-                for i, (size, avg_dist, sites) in enumerate(zip(cluster_sizes, average_distance, cluster_sites_data)):
-                    # Convert site dictionaries to Site objects
-                    from pymatgen.core.sites import PeriodicSite
-                    sites_objects = [PeriodicSite.from_dict(site) for site in sites]
-                    
-                    clusters.append({
-                        'size': size,
-                        'average_distance': avg_dist,
-                        'sites': sites_objects,
-                        'label': f'X{i}'
-                    })
-                
-                # Get graph data if available
-                graph = None
-                if 'graph' in compound_data.columns:
-                    graph = compound_data.iloc[0]['graph']
-                
-                # Get transition metal indices for visualization
-                tm_indices = [i for i, site in enumerate(structure) 
-                             if site.specie.symbol in transition_metals]
-                
-                # Store essential data for visualization
-                result_data = {
-                    "structure": structure,
-                    "clusters": clusters,
-                    "graph": graph,
-                    "formula": row_data['formula'],
-                    "space_group": row_data.get('space_group', 'Unknown'),
-                    "point_groups": row_data.get('point_groups', {}),
-                    "dimensionality": row_data.get('predicted_dimentionality', 0),
-                    "energy_above_hull": row_data.get('energy_above_hull'),
-                    "formation_energy_per_atom": row_data.get('formation_energy_per_atom'),
-                    "rank_score": row_data.get('rank_score'),
-                    "tm_indices": tm_indices
-                }
-                
-                # Generate a supercell for visualization
-                try:
-                    # Generate lattice structure directly
-                    lattice_structure, space_group, _ = generate_lattice_with_clusters(structure, clusters)
-                    result_data["lattice_structure"] = lattice_structure
-                    result_data["space_group"] = space_group
-                    
-                    # Generate a separate supercell for dimensionality analysis only
-                    dimensionality_supercell = generate_supercell(lattice_structure, supercell_matrix=(10, 10, 10))
-                    result_data["supercell"] = dimensionality_supercell
-                    
-                    # Get singular values for dimensionality visualization
-                    _, singular_values = classify_dimensionality(dimensionality_supercell)
-                    result_data["singular_values"] = singular_values
-                except Exception as e:
-                    logger.warning(f"Error processing supercell for {material_id}: {e}")
-                
-                return material_id, result_data
-                
-            except Exception as e:
-                logger.error(f"Error processing data for {row_data.get('material_id', 'unknown')}: {e}")
-                return row_data.get('material_id', 'unknown'), None
-        
-        # Process compounds in parallel
-        logger.info(f"Starting parallel processing with {n_jobs} workers")
-        # Convert the dataframe to a list of tuples for parallel processing
-        top_compounds_list = list(top_compounds.iterrows())
-        
-        # Run the parallel processing with shared logger
-        results = Parallel(n_jobs=n_jobs)(
-            delayed(process_compound_visualization)(idx, row, logger) 
-            for idx, row in top_compounds_list
-        )
-        
-        # Convert results to a dictionary
-        for material_id, data in results:
-            if data is not None:
-                processed_data[material_id] = data
-        
-        logger.info(f"Processed visualization data for {len(processed_data)} compounds")
-        
-    except ImportError:
-        logger.warning("joblib not available, falling back to sequential processing")
-        # Fall back to sequential processing if joblib is not available
-        for idx, row in top_compounds.iterrows():
-            material_id, data = process_compound_visualization(idx, row, logger)
-            if data is not None:
-                processed_data[material_id] = data
+        # Import joblib for parallel processing
+        try:
+            from joblib import Parallel, delayed
+            
+            # Define the function to process a single compound
+            def process_compound_visualization(idx, row_data, logger):
+                """Process visualization data for a single compound."""
+                # ...existing code...
+            
+            # Process compounds in parallel
+            logger.info(f"Starting parallel processing with {n_jobs} workers")
+            # Convert the dataframe to a list of tuples for parallel processing
+            top_compounds_list = list(top_compounds.iterrows())
+            
+            # Run the parallel processing with shared logger
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(process_compound_visualization)(idx, row, logger) 
+                for idx, row in top_compounds_list
+            )
+            
+            # Convert results to a dictionary
+            for material_id, data in results:
+                if data is not None:
+                    processed_data[material_id] = data
+            
+            logger.info(f"Processed visualization data for {len(processed_data)} compounds")
+            
+        except ImportError:
+            logger.warning("joblib not available, falling back to sequential processing")
+            # Fall back to sequential processing if joblib is not available
+            for idx, row in top_compounds.iterrows():
+                material_id, data = process_compound_visualization(idx, row, logger)
+                if data is not None:
+                    processed_data[material_id] = data
+    else:
+        logger.info("Skipping visualization data processing (--no-pdf option was used)")
     
     # 7. Generate visualization and save to PDF if requested
     if save_pdf and processed_data:
@@ -403,7 +452,7 @@ def run_analysis(
                     "formula": data["formula"],
                     "num_clusters": len(data["clusters"]),
                     "cluster_sizes": [cluster["size"] for cluster in data["clusters"]] if data["clusters"] else [],
-                    "average_distance": np.mean([cluster["average_distance"] for cluster in data["clusters"]]) if data["clusters"] else 0,
+                    "average_distance": float(np.mean([cluster["average_distance"] for cluster in data["clusters"]])) if data["clusters"] else 0,
                     "rank_score": data.get("rank_score", 0)
                 }
                 for material_id, data in processed_data.items()
@@ -755,6 +804,9 @@ def run_analysis(
     end_time = time.time()
     elapsed_time = end_time - start_time
     logger.info(f"Analysis completed in {elapsed_time:.2f} seconds")
+    
+    # Clean up any joblib resources to prevent memory leaks
+    cleanup_joblib_resources()
     
     # Return summary data
     return {

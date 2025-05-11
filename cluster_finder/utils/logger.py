@@ -19,13 +19,13 @@ def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> None
         verbose (bool): Enable verbose logging (debug-level and INFO messages)
         log_file (str, optional): Path to log file
     """
-    # By default, use WARNING level (quiet mode)
-    # If verbose is True, use INFO level
-    level = logging.INFO if verbose else logging.WARNING
+    # In quiet mode, only show ERROR and above for console output
+    # But maintain INFO level for the logger itself to allow child processes to log
+    level = logging.INFO if verbose else logging.ERROR
     
-    # Configure root logger
+    # Configure root logger to always accept INFO
     root_logger = logging.getLogger()
-    root_logger.setLevel(level)
+    root_logger.setLevel(logging.INFO)
     
     # Remove existing handlers to avoid duplicate logs
     for handler in root_logger.handlers[:]:
@@ -34,13 +34,7 @@ def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> None
     # Set console quiet mode based on verbose flag
     console.quiet = not verbose
     
-    # Suppress progress bars in non-verbose mode
-    if not verbose:
-        os.environ['TQDM_DISABLE'] = '1'
-    else:
-        os.environ.pop('TQDM_DISABLE', None)
-    
-    # Console handler with rich formatting (this will handle all console output)
+    # Configure the console handler with the user-specified level
     console_handler = RichHandler(
         console=console,
         rich_tracebacks=True,
@@ -48,18 +42,29 @@ def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> None
         show_path=verbose,
         markup=True,
         log_time_format="[%X]" if verbose else None,
-        omit_repeated_times=True
+        omit_repeated_times=True,
+        level=level  # This controls what actually gets shown to the user
     )
-    console_handler.setLevel(level)
     root_logger.addHandler(console_handler)
     
     # File handler if specified (this will always have detailed logs)
     if log_file:
         os.makedirs(os.path.dirname(log_file) or '.', exist_ok=True)
         file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(logging.DEBUG)  # Always keep detailed logs in file
+        file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         root_logger.addHandler(file_handler)
+        
+    # In non-verbose mode, suppress common verbose outputs
+    if not verbose:
+        # Suppress progress bars
+        os.environ['TQDM_DISABLE'] = '1'
+        
+        # Suppress INFO logs from common verbose modules
+        for module in ['urllib3', 'matplotlib', 'pymatgen', 'joblib', 'paramiko']:
+            logging.getLogger(module).setLevel(logging.WARNING)
+    else:
+        os.environ.pop('TQDM_DISABLE', None)
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
     """

@@ -6,19 +6,144 @@ import os
 import time
 import json
 import logging
+import logging.handlers
+import sys
+import multiprocessing
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed, wait
 from rich.console import Console
+from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, SpinnerColumn
+from rich.table import Table
 
 from cluster_finder.utils.config_utils import load_config, get_element_combinations
-from cluster_finder.utils.logger import get_logger
+from cluster_finder.utils.logger import get_logger, setup_logging
 from cluster_finder.analysis.analysis import run_analysis
 from cluster_finder.utils.exceptions import APIRateLimitError, InvalidInputError
 
 # Get the logger without configuring it (will inherit from root logger)
 logger = get_logger('cluster_finder.batch')
 console = Console()
+
+# Global variable for worker verbosity
+_worker_verbose = False
+_worker_n_jobs = 1
+
+def worker_initializer(verbose=False, n_jobs=1):
+    """Initialize worker processes with proper logging configuration."""
+    # Use the existing rich logger configuration from the logger module
+    from cluster_finder.utils.logger import setup_logging
+    global _worker_verbose, _worker_n_jobs
+    _worker_verbose = verbose
+    _worker_n_jobs = n_jobs
+    
+    # Configure logging with the correct verbosity
+    setup_logging(verbose=verbose)
+    
+    # Get the worker logger and configure it
+    worker_logger = logging.getLogger('cluster_finder')
+    # Always show errors, but only show info/debug in verbose mode
+    worker_logger.setLevel(logging.INFO if verbose else logging.ERROR)
+    
+    if verbose:
+        worker_logger.info(f"Worker process {multiprocessing.current_process().name} initialized")
+
+# Simple function for multiprocessing to avoid pickling issues
+def run_analysis_wrapper(primary_tm, anion, api_key, output_dir, config, n_jobs, save_pdf, save_csv):
+    """Wrapper function for run_analysis to avoid pickling issues with multiprocessing."""
+    try:
+        # Get a properly configured logger for this worker process
+        process_logger = get_logger(f"cluster_finder.worker.{primary_tm}-{anion}")
+        if _worker_verbose:
+            process_logger.info(f"Starting analysis for {primary_tm}-{anion} system")
+        
+        # Convert Path object to string for serialization
+        if isinstance(output_dir, Path):
+            output_dir = str(output_dir)
+            
+        # Call the actual analysis function with proper verbosity
+        result = run_analysis(
+            primary_tm=primary_tm,
+            anion=anion,
+            api_key=api_key,
+            output_dir=Path(output_dir),
+            config=config,
+            n_jobs=_worker_n_jobs,
+            save_pdf=save_pdf,
+            save_csv=save_csv,
+            verbose=_worker_verbose  # Pass through verbosity setting
+        )
+        
+        if _worker_verbose:
+            process_logger.info(f"Completed analysis for {primary_tm}-{anion} system with {result.get('compounds_with_clusters_count', 0)} compounds with clusters")
+        return result
+        
+    except Exception as e:
+        process_logger = get_logger(f"cluster_finder.worker.{primary_tm}-{anion}")
+        process_logger.error(f"Error in analysis for {primary_tm}-{anion}: {str(e)}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "system": f"{primary_tm}-{anion}"
+        }
+
+def cleanup_multiprocessing_resources(logger):
+    """Clean up multiprocessing resources and temporary files."""
+    import tempfile
+    import shutil
+    import glob
+    import gc
+    import sys
+    import multiprocessing
+
+    try:
+        # Find and clean up any joblib temp folders in the system temp directory
+        tmp_pattern = os.path.join(tempfile.gettempdir(), "joblib_memmapping_folder_*")
+        for folder in glob.glob(tmp_pattern):
+            try:
+                if os.path.exists(folder):
+                    logger.info(f"Cleaning up joblib temporary folder: {folder}")
+                    shutil.rmtree(folder, ignore_errors=True)
+            except Exception as e:
+                logger.warning(f"Failed to clean up folder {folder}: {e}")
+
+        # Python version-dependent cleanup
+        if sys.version_info >= (3, 8):
+            # For Python 3.8+, use the resource tracker
+            try:
+                import multiprocessing.resource_tracker
+                if hasattr(multiprocessing.resource_tracker, '_resource_tracker'):
+                    tracker = multiprocessing.resource_tracker._resource_tracker
+                    if tracker is not None:
+                        logger.info("Cleaning up multiprocessing resources")
+                        if hasattr(tracker, 'ensure_running'):
+                            tracker.ensure_running()
+            except ImportError:
+                pass
+        else:
+            # For older Python versions, try direct semaphore cleanup
+            try:
+                multiprocessing.util._cleanup()
+            except:
+                pass
+
+        # Clean up remaining processes
+        if hasattr(multiprocessing, 'active_children'):
+            active_children = multiprocessing.active_children()
+            if active_children:
+                logger.info(f"Terminating {len(active_children)} remaining child processes...")
+                for child in active_children:
+                    try:
+                        child.terminate()
+                        child.join(timeout=1.0)
+                    except Exception:
+                        pass
+
+        # Force garbage collection
+        gc.collect()
+
+    except Exception as cleanup_err:
+        logger.warning(f"Error during resource cleanup: {cleanup_err}")
 
 def run_batch_analysis(
     api_key: str,
@@ -29,7 +154,10 @@ def run_batch_analysis(
     max_workers: int = 4,
     save_pdf: bool = True,
     save_csv: bool = True,
-    n_jobs_per_analysis: int = 2
+    n_jobs_per_analysis: int = 2,
+    verbose: bool = False,
+    use_mpi: bool = False,
+    mpi_cores: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Run analysis in parallel for multiple TM-anion systems.
@@ -44,6 +172,9 @@ def run_batch_analysis(
         save_pdf: Whether to save PDF reports
         save_csv: Whether to save CSV data
         n_jobs_per_analysis: Number of parallel jobs for each analysis
+        verbose: Show detailed logging information
+        use_mpi: Whether to use multiprocessing instead of threading
+        mpi_cores: Number of CPU cores to use for multiprocessing (None = use all available)
         
     Returns:
         Dictionary containing summary results for all analyses
@@ -74,7 +205,23 @@ def run_batch_analysis(
     if not systems:
         raise InvalidInputError("No valid systems to analyze. Check your transition metals and anions selection.")
     
-    logger.info(f"Preparing to analyze {len(systems)} TM-anion systems with {max_workers} workers")
+    # Configure multiprocessing if requested
+    if use_mpi:
+        # Determine number of cores to use
+        available_cores = multiprocessing.cpu_count()
+        if mpi_cores is None:
+            actual_cores = available_cores
+        else:
+            actual_cores = min(mpi_cores, available_cores)
+        
+        # Adjust workers based on number of cores and systems
+        max_workers = min(actual_cores, len(systems))
+        console.print(f"Using multiprocessing with {max_workers} cores")
+    else:
+        console.print(f"Using threading with {max_workers} workers")
+    
+    # Always show the number of systems to be analyzed
+    console.print(f"Analyzing {len(systems)} TM-anion systems")
     
     # Prepare summary object
     summary = {
@@ -83,90 +230,248 @@ def run_batch_analysis(
             "transition_metals": config.get('transition_metals', []),
             "anions": config.get('anions', []),
             "max_workers": max_workers,
-            "n_jobs_per_analysis": n_jobs_per_analysis
+            "n_jobs_per_analysis": n_jobs_per_analysis,
+            "use_multiprocessing": use_mpi
         },
         "results": {}
     }
     
-    # Create a semaphore to limit MP API requests
     start_time = time.time()
     
+    # Set worker verbosity
+    global _worker_verbose
+    _worker_verbose = verbose
+    
+    # Choose the executor type based on the mpi flag
+    ExecutorClass = ProcessPoolExecutor if use_mpi else ThreadPoolExecutor
+    
     # Run analyses in parallel
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    executor = None
+    try:
+        # Create the executor with worker initialization for multiprocessing
+        if use_mpi:
+            executor = ExecutorClass(
+                max_workers=max_workers, 
+                initializer=worker_initializer,
+                initargs=(verbose, n_jobs_per_analysis)
+            )
+        else:
+            executor = ExecutorClass(max_workers=max_workers)
+            # For threading, configure logging in the main process
+            setup_logging(verbose=verbose)
+            
         # Submit all analysis jobs
         futures = {}
         for system in systems:
             primary_tm, anion = system
-            logger.info(f"Submitting analysis for {primary_tm}-{anion}")
+            if verbose:
+                logger.info(f"Submitting analysis for {primary_tm}-{anion}")
             
-            # Submit the job to the executor
-            future = executor.submit(
-                run_analysis,
-                primary_tm=primary_tm,
-                anion=anion,
-                api_key=api_key,
-                output_dir=output_dir,
-                config=config,
-                n_jobs=n_jobs_per_analysis,
-                save_pdf=save_pdf,
-                save_csv=save_csv
-            )
+            # When using multiprocessing, use the wrapper function to avoid pickling issues
+            if use_mpi:
+                # For multiprocessing, use a simpler function interface to avoid pickling RLock objects
+                future = executor.submit(
+                    run_analysis_wrapper,
+                    primary_tm,
+                    anion,
+                    api_key,
+                    str(output_dir),  # Convert Path to string for serialization
+                    config,
+                    n_jobs_per_analysis,
+                    save_pdf,
+                    save_csv
+                )
+            else:
+                # For threading, use the standard function
+                future = executor.submit(
+                    run_analysis,
+                    primary_tm=primary_tm,
+                    anion=anion,
+                    api_key=api_key,
+                    output_dir=output_dir,
+                    config=config,
+                    n_jobs=n_jobs_per_analysis,
+                    save_pdf=save_pdf,
+                    save_csv=save_csv
+                )
             
             # Store the future with its system information
             futures[future] = (primary_tm, anion)
             
             # Add a small delay between submissions to avoid API rate limits
-            time.sleep(1.0)  # Increased delay to better handle rate limits
+            time.sleep(1.0)
         
-        # Process results as they complete
-        for future in as_completed(futures):
-            primary_tm, anion = futures[future]
-            system_name = f"{primary_tm}-{anion}"
-            
-            try:
-                # Get the result
-                result = future.result()
-                logger.info(f"Completed analysis for {system_name}")
-                
-                # Add to summary
-                summary["results"][system_name] = result
-                
-                # Write/update the summary file after each completion
-                with open(output_dir / "batch_summary.json", "w") as f:
-                    json.dump(summary, f, indent=2)
+        # Process all results
+        try:
+            # In verbose mode, don't use the progress bar to avoid conflicts with logger output
+            if verbose:
+                # Process results without a progress bar in verbose mode
+                for future in as_completed(futures):
+                    primary_tm, anion = futures[future]
+                    system_name = f"{primary_tm}-{anion}"
                     
-            except Exception as e:
-                logger.error(f"Analysis failed for {system_name}: {e}")
-                # Record the error in the summary
-                summary["results"][system_name] = {
-                    "status": "error",
-                    "error": str(e),
-                    "system": system_name
-                }
+                    try:
+                        # Get the result
+                        result = future.result()
+                        # Show completion message
+                        console.print(f"[green]✓ Completed: {system_name} - Found {result.get('compounds_with_clusters_count', 0)} compounds with clusters[/green]")
+                        
+                        # Add to summary
+                        summary["results"][system_name] = result
+                        
+                        # Write/update the summary file after each completion
+                        with open(output_dir / "batch_summary.json", "w") as f:
+                            json.dump(summary, f, indent=2)
+                            
+                    except Exception as e:
+                        error_msg = str(e)
+                        # Show error message
+                        console.print(f"[red]✗ Failed: {system_name} - {error_msg}[/red]")
+                        
+                        # Record the error in the summary
+                        summary["results"][system_name] = {
+                            "status": "error",
+                            "error": error_msg,
+                            "system": system_name
+                        }
+                        
+                        # Handle rate limit errors by adding longer delay
+                        if isinstance(e, APIRateLimitError):
+                            console.print("[yellow]Hit API rate limit, adding delay...[/yellow]")
+                            time.sleep(5.0)
+            else:
+                # Use the progress bar in non-verbose mode
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[bold blue]{task.description}"),
+                    BarColumn(),
+                    TaskProgressColumn(),
+                    TimeRemainingColumn(),
+                    console=console,
+                    transient=False,
+                    refresh_per_second=10
+                ) as progress:
+                    # Add a task for overall progress
+                    task = progress.add_task(f"Processing {len(systems)} systems", total=len(systems))
+                    
+                    # Process results as they complete
+                    for future in as_completed(futures):
+                        primary_tm, anion = futures[future]
+                        system_name = f"{primary_tm}-{anion}"
+                        
+                        try:
+                            # Get the result
+                            result = future.result()
+                            
+                            # Show completion message
+                            console.print(f"[green]✓ Completed: {system_name} - Found {result.get('compounds_with_clusters_count', 0)} compounds with clusters[/green]")
+                            
+                            # Add to summary
+                            summary["results"][system_name] = result
+                            
+                            # Write/update the summary file after each completion
+                            with open(output_dir / "batch_summary.json", "w") as f:
+                                json.dump(summary, f, indent=2)
+                                
+                        except Exception as e:
+                            error_msg = str(e)
+                            # Show error message
+                            console.print(f"[red]✗ Failed: {system_name} - {error_msg}[/red]")
+                            
+                            # Record the error in the summary
+                            summary["results"][system_name] = {
+                                "status": "error",
+                                "error": error_msg,
+                                "system": system_name
+                            }
+                            
+                            # Handle rate limit errors by adding longer delay
+                            if isinstance(e, APIRateLimitError):
+                                console.print("[yellow]Hit API rate limit, adding delay...[/yellow]")
+                                time.sleep(5.0)
+                        
+                        # Update progress
+                        progress.update(task, advance=1)
+        # Make sure to catch keyboard interrupts to allow proper cleanup
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Analysis interrupted by user. Cleaning up...[/yellow]")
+            
+            # Cancel any pending futures
+            for future in futures:
+                if not future.done():
+                    future.cancel()
+            
+            # Wait for a short time for active tasks to complete or be cancelled
+            wait(futures, timeout=5)
+            
+            # Update summary with partial results
+            summary["status"] = "interrupted"
+            summary["end_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            elapsed_time = time.time() - start_time
+            summary["total_time_seconds"] = elapsed_time
+            summary["completed_systems"] = len([r for r in summary["results"].values() 
+                                               if r.get("status") == "completed"])
+            summary["failed_systems"] = len([r for r in summary["results"].values() 
+                                            if r.get("status") == "error"])
+            
+            # Save the partial summary
+            with open(output_dir / "batch_summary.json", "w") as f:
+                json.dump(summary, f, indent=2)
                 
-                # Handle rate limit errors by adding longer delay
-                if isinstance(e, APIRateLimitError):
-                    logger.warning("Hit API rate limit, adding delay...")
-                    time.sleep(5.0)
-    
-    # Calculate the total time
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    
-    # Add final stats to summary
-    summary["end_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    summary["total_time_seconds"] = elapsed_time
-    summary["completed_systems"] = len([r for r in summary["results"].values() 
-                                       if r.get("status") == "completed"])
-    summary["failed_systems"] = len([r for r in summary["results"].values() 
-                                    if r.get("status") == "error"])
-    
-    # Save the final summary
-    with open(output_dir / "batch_summary.json", "w") as f:
-        json.dump(summary, f, indent=2)
-    
-    logger.info(f"Batch analysis completed in {elapsed_time:.2f} seconds")
-    logger.info(f"Results saved to {output_dir}")
+            console.print(f"[yellow]Partial results saved to {output_dir}/batch_summary.json[/yellow]")
+            raise
+            
+    finally:
+        try:
+            # Clean up multiprocessing resources
+            if use_mpi and executor is not None:
+                logger.info("Cleaning up multiprocessing resources...")
+                
+                # Cancel any pending futures
+                for future in futures:
+                    if not future.done():
+                        future.cancel()
+                
+                # Wait briefly for futures to complete
+                wait(futures, timeout=2.0)
+                
+                # Shutdown the executor with wait=True to ensure proper cleanup
+                executor.shutdown(wait=True)
+                
+                # Clean up all multiprocessing resources using the dedicated function
+                cleanup_multiprocessing_resources(logger)
+                
+            elif executor is not None:
+                # For thread executor, just shutdown normally
+                executor.shutdown(wait=True)
+            
+            # Calculate and add final stats to summary
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            
+            # Add final stats to summary
+            summary["status"] = "completed"
+            summary["end_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            summary["total_time_seconds"] = elapsed_time
+            summary["completed_systems"] = len([r for r in summary["results"].values() 
+                                               if r.get("status") == "completed"])
+            summary["failed_systems"] = len([r for r in summary["results"].values() 
+                                            if r.get("status") == "error"])
+            
+            # Save the final summary
+            with open(output_dir / "batch_summary.json", "w") as f:
+                json.dump(summary, f, indent=2)
+            
+            # Show completion message
+            console.print(f"\n[bold green]Batch analysis completed in {elapsed_time:.2f} seconds[/bold green]")
+            console.print(f"[bold]Results saved to {output_dir}[/bold]\n")
+            
+            # Note: We don't display a results table here anymore
+            # The CLI will handle displaying the results table to avoid duplication
+            
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+            raise
     
     return summary
 
@@ -182,10 +487,16 @@ if __name__ == "__main__":
     parser.add_argument("--anions", nargs="+", help="Specific anions to analyze")
     parser.add_argument("--max-workers", type=int, default=4, help="Maximum number of parallel system analyses")
     parser.add_argument("--n-jobs", type=int, default=2, help="Number of parallel jobs for each analysis")
+    parser.add_argument("--mpi", nargs="?", const=-1, type=int, help="Enable multiprocessing with the specified number of cores (use all available if no value provided)")
     parser.add_argument("--no-pdf", action="store_true", help="Do not save PDF reports")
     parser.add_argument("--no-csv", action="store_true", help="Do not save CSV data")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed logging information")
     
     args = parser.parse_args()
+    
+    # Handle MPI argument
+    use_mpi = args.mpi is not None
+    mpi_cores = None if args.mpi == -1 else args.mpi if args.mpi > 0 else None
     
     run_batch_analysis(
         api_key=args.api_key,
@@ -196,5 +507,8 @@ if __name__ == "__main__":
         max_workers=args.max_workers,
         save_pdf=not args.no_pdf,
         save_csv=not args.no_csv,
-        n_jobs_per_analysis=args.n_jobs
+        n_jobs_per_analysis=args.n_jobs,
+        verbose=args.verbose,
+        use_mpi=use_mpi,
+        mpi_cores=mpi_cores
     )

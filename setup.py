@@ -94,7 +94,8 @@ setup(
         "scipy>=1.7",
         "tqdm>=4.65.0",
         "aiohttp>=3.8.0",
-        "ase>=3.22.0"
+        "ase>=3.22.0",
+        "distro>=1.8.0"
     ],
     entry_points={
         "console_scripts": [

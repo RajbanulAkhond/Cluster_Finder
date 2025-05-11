@@ -53,14 +53,24 @@ def calculate_average_distance(sites, max_radius=3.5):
     if len(sites) < 2:
         return 0.0
     
-    distances = []
-    for i in range(len(sites)):
-        for j in range(i+1, len(sites)):
-            dist = sites[i].distance(sites[j])
-            if dist <= max_radius:
-                distances.append(dist)
+    # Extract coordinates once for all sites
+    coords = np.array([site.coords for site in sites])
+    n_sites = len(sites)
     
-    return np.mean(distances) if distances else 0.0
+    # Create indices for all pairs
+    i, j = np.triu_indices(n_sites, k=1)
+    
+    # Calculate all pairwise distances at once using vectorized operations
+    # Reshape into a format that allows broadcasting
+    site_i_coords = coords[i]
+    site_j_coords = coords[j]
+    distances = np.linalg.norm(site_i_coords - site_j_coords, axis=1)
+    
+    # Filter distances within max_radius
+    valid_distances = distances[distances <= max_radius]
+    
+    # Convert NumPy float to Python native float
+    return float(np.mean(valid_distances)) if len(valid_distances) > 0 else 0.0
 
 
 def build_graph(sites, cutoff=3.5, distances_cache=None):
@@ -75,27 +85,38 @@ def build_graph(sites, cutoff=3.5, distances_cache=None):
     Returns:
         networkx.Graph: Graph representation of connectivity
     """
+    n_sites = len(sites)
     G = nx.Graph()
-    G.add_nodes_from(range(len(sites)))
+    G.add_nodes_from(range(n_sites))
     
-    for i in range(len(sites)):
-        for j in range(i + 1, len(sites)):
-            if distances_cache is not None:
+    # If no distances cache provided, calculate all pairwise distances in batch
+    if distances_cache is None:
+        coords = np.array([site.coords for site in sites])
+        i, j = np.triu_indices(n_sites, k=1)
+        site_i_coords = coords[i]
+        site_j_coords = coords[j]
+        distances = np.linalg.norm(site_i_coords - site_j_coords, axis=1)
+        
+        # Add edges for pairs with distance <= cutoff
+        edges = [(i[k], j[k]) for k in range(len(i)) if distances[k] <= cutoff]
+        G.add_edges_from(edges)
+    else:
+        # Use pre-computed distances
+        for i in range(n_sites):
+            for j in range(i + 1, n_sites):
                 key = tuple(sorted([i, j]))
                 if key not in distances_cache:
+                    # Calculate only if needed
                     distances_cache[key] = sites[i].distance(sites[j])
-                distance = distances_cache[key]
-            else:
-                distance = sites[i].distance(sites[j])
-            
-            if distance <= cutoff:
-                G.add_edge(i, j)
+                
+                if distances_cache[key] <= cutoff:
+                    G.add_edge(i, j)
     
     return G
 
 
 def split_cluster(cluster, parent_avg_distance, lattice, cluster_size=DEFAULT_CLUSTER_SIZE+1, 
-                 initial_cutoff=3.5, cutoff_step=0.001, min_cutoff=2.5, 
+                 initial_cutoff=3.5, cutoff_step=0.1, min_cutoff=2.5, 
                  tolerance=0.01, centroid_threshold=DEFAULT_MAX_RADIUS):
     """
     Split large clusters into smaller sub-clusters with centroid distance checks.
@@ -114,58 +135,106 @@ def split_cluster(cluster, parent_avg_distance, lattice, cluster_size=DEFAULT_CL
     Returns:
         list: List of sub-clusters or [cluster] if no split is performed
     """
-    # Cache distances once to avoid redundant calculations
+    # Skip small clusters immediately
+    if len(cluster) <= cluster_size:
+        return [cluster]
+        
+    # Pre-compute all distances at once using NumPy arrays
+    coords = np.array([site.coords for site in cluster])
+    n_sites = len(cluster)
+    
+    # Create distance matrix once
+    row_idx, col_idx = np.triu_indices(n_sites, k=1)
+    distances = np.linalg.norm(coords[row_idx] - coords[col_idx], axis=1)
+    
+    # Create a mapping from (i, j) indices to distance array index
+    i, j = np.triu_indices(n_sites, k=1)
+    idx_mapping = {(i[k], j[k]): k for k in range(len(i))}
+    
+    # Create distances cache for faster lookup
     distances_cache = {}
-    for i, site1 in enumerate(cluster):
-        for j, site2 in enumerate(cluster[i+1:], start=i+1):
-            distances_cache[(i, j)] = site1.distance(site2)
-
-    current_cutoff = initial_cutoff
-    while current_cutoff >= min_cutoff:
+    for i_idx in range(n_sites):
+        for j_idx in range(i_idx+1, n_sites):
+            key = (i_idx, j_idx)
+            dist_idx = idx_mapping.get(key)
+            if dist_idx is not None:
+                distances_cache[key] = distances[dist_idx]
+    
+    # Use binary search approach to find cutoff more efficiently
+    cutoffs_to_try = np.arange(initial_cutoff, min_cutoff - cutoff_step, -cutoff_step)
+    
+    for current_cutoff in cutoffs_to_try:
         # Build graph with cached distances
         graph = build_graph(cluster, current_cutoff, distances_cache)
 
-        # Identify candidate sub-clusters
+        # Get candidate sub-clusters efficiently 
+        components = list(nx.connected_components(graph))
+        
+        # Skip if there's only one component (the whole cluster)
+        if len(components) <= 1:
+            continue
+            
+        # Process all components at once
         candidate_sub_clusters = []
-        for component in nx.connected_components(graph):
+        
+        for component in components:
+            component = list(component)  # Convert to list
+            if len(component) < 2:
+                continue
+                
             sub_cluster = [cluster[i] for i in component]
-            if len(sub_cluster) >= 2:
-                sub_avg_distance = calculate_average_distance(sub_cluster, initial_cutoff)
+            # Extract relevant distances for this sub-component
+            sub_dist_indices = []
+            for idx, (i_idx, j_idx) in enumerate(zip(row_idx, col_idx)):
+                if i_idx in component and j_idx in component:
+                    sub_dist_indices.append(idx)
+                    
+            if sub_dist_indices:
+                sub_distances = distances[sub_dist_indices]
+                sub_distances = sub_distances[sub_distances <= initial_cutoff]
+                sub_avg_distance = float(np.mean(sub_distances)) if len(sub_distances) > 0 else 0.0
+                
                 if (parent_avg_distance - sub_avg_distance) > tolerance:
                     candidate_sub_clusters.append(sub_cluster)
-
-        # Process candidates if any
-        if candidate_sub_clusters:
-            # Calculate centroids
-            centroids = [calculate_centroid(sub_cluster, lattice)
-                        for sub_cluster in candidate_sub_clusters]
-
-            # Check centroid distances efficiently
-            for i, centroid_i in enumerate(centroids):
-                for centroid_j in centroids[i+1:]:
-                    if np.linalg.norm(centroid_i - centroid_j) < centroid_threshold:
-                        return [cluster]  # Early exit if centroids are too close
-
-            # Process sub-clusters
-            sub_clusters = []
-            for sub_cluster in candidate_sub_clusters:
-                if len(sub_cluster) > cluster_size:
-                    sub_clusters.extend(
-                        split_cluster(sub_cluster,
-                                    calculate_average_distance(sub_cluster, initial_cutoff),
-                                    lattice, cluster_size, initial_cutoff, cutoff_step,
-                                    min_cutoff, tolerance, centroid_threshold))
-                else:
-                    sub_clusters.append(sub_cluster)
+        
+        # If no suitable candidates found, move to the next cutoff
+        if not candidate_sub_clusters:
+            continue
+            
+        # Calculate centroids once
+        centroids = np.array([calculate_centroid(sub_cluster, lattice) for sub_cluster in candidate_sub_clusters])
+        
+        # Calculate all centroid distances at once using broadcasting
+        if len(centroids) > 1:
+            i, j = np.triu_indices(len(centroids), k=1)
+            centroid_distances = np.linalg.norm(centroids[i] - centroids[j], axis=1)
+            
+            # Check if any centroids are too close
+            if np.any(centroid_distances < centroid_threshold):
+                return [cluster]  # Early exit if centroids are too close
+        
+        # Process sub-clusters
+        sub_clusters = []
+        for sub_cluster in candidate_sub_clusters:
+            if len(sub_cluster) > cluster_size:
+                # Recursively split large sub-clusters
+                sub_avg_distance = calculate_average_distance(sub_cluster, initial_cutoff)
+                sub_clusters.extend(
+                    split_cluster(sub_cluster, sub_avg_distance, lattice, 
+                                 cluster_size, initial_cutoff, cutoff_step,
+                                 min_cutoff, tolerance, centroid_threshold))
+            else:
+                sub_clusters.append(sub_cluster)
+        
+        # Return results if we found valid sub-clusters
+        if sub_clusters:
             return sub_clusters
-
-        current_cutoff -= cutoff_step
 
     # No valid split found
     return [cluster]
 
 
-def analyze_clusters(clusters, lattice, cluster_size=DEFAULT_CLUSTER_SIZE+1, max_radius=DEFAULT_MAX_RADIUS):
+def analyze_clusters(clusters, lattice, cluster_size=DEFAULT_CLUSTER_SIZE+1, max_radius=DEFAULT_MAX_RADIUS, n_jobs=4):
     """
     Analyze and process clusters found in a structure.
     
@@ -174,24 +243,52 @@ def analyze_clusters(clusters, lattice, cluster_size=DEFAULT_CLUSTER_SIZE+1, max
         lattice (Lattice): The lattice of the structure
         cluster_size (int): Desired maximum cluster size
         max_radius (float): Maximum radius to consider
+        n_jobs (int): Number of parallel jobs for processing clusters
         
     Returns:
         list: Processed clusters with metadata
     """
-    processed_clusters = []
-    for cluster in clusters:
+    import concurrent.futures
+    
+    # Process a single cluster
+    def process_cluster(cluster):
         avg_distance = calculate_average_distance(cluster, max_radius)
         sub_clusters = split_cluster(cluster, avg_distance, lattice, cluster_size)
         
+        result = []
         for sub_cluster in sub_clusters:
             sub_avg_distance = calculate_average_distance(sub_cluster, max_radius)
             centroid = calculate_centroid(sub_cluster, lattice)
-            processed_clusters.append({
+            result.append({
                 "sites": sub_cluster,
                 "size": len(sub_cluster),
                 "average_distance": sub_avg_distance,
                 "centroid": centroid
             })
+        return result
+    
+    # For small number of clusters, process serially
+    if len(clusters) < 3:
+        processed_clusters = []
+        for cluster in clusters:
+            processed_clusters.extend(process_cluster(cluster))
+        return processed_clusters
+    
+    # Process clusters in parallel
+    processed_clusters = []
+    with concurrent.futures.ProcessPoolExecutor(max_workers=n_jobs) as executor:
+        # Submit all clusters for processing
+        future_to_cluster = {executor.submit(process_cluster, cluster): cluster for cluster in clusters}
+        
+        # Collect results as they complete
+        for future in concurrent.futures.as_completed(future_to_cluster):
+            try:
+                result = future.result()
+                processed_clusters.extend(result)
+            except Exception as exc:
+                # Fall back to sequential processing for any failures
+                cluster = future_to_cluster[future]
+                processed_clusters.extend(process_cluster(cluster))
     
     return processed_clusters
 
@@ -300,10 +397,12 @@ def get_compounds_with_clusters(entries, transition_metals, primary_transition_m
         analyzed_clusters = analyze_clusters(clusters, structure.lattice)
 
         # Filter clusters to ensure they contain the primary transition metal
+        # and exclude clusters with average distance less than equal to 2.3
         if primary_transition_metal:
             analyzed_clusters = [
                 c for c in analyzed_clusters
                 if any(site.specie.symbol == primary_transition_metal for site in c["sites"])
+                and not round(c["average_distance"], 1) <= 2.3
             ]
 
         # Skip compounds that now have zero valid clusters

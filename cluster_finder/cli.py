@@ -733,6 +733,8 @@ def advanced_batch_analysis(
     save_pdf: bool = typer.Option(True, "--no-pdf", help="Do not save PDF reports"),
     save_csv: bool = typer.Option(True, "--no-csv", help="Do not save CSV files"),
     n_jobs: int = typer.Option(1, "--n-jobs", "-j", help="Number of parallel jobs"),
+    use_mpi: bool = typer.Option(False, "--mpi", help="Enable multiprocessing to use all available CPU cores"),
+    mpi_cores: Optional[int] = typer.Option(None, "--mpi-cores", "-m", help="Number of CPU cores to use for multiprocessing"),
     show_systems: bool = typer.Option(False, "--show-systems", help="Only show the systems that would be analyzed without running"),
     summary_only: bool = typer.Option(False, "--summary-only", help="Only show the summary table, not individual system results"),
     retry_failed: bool = typer.Option(False, "--retry-failed", help="Retry previously failed systems from a batch run"),
@@ -817,7 +819,10 @@ def advanced_batch_analysis(
             max_workers=max_workers,
             save_pdf=save_pdf,
             save_csv=save_csv,
-            n_jobs_per_analysis=n_jobs
+            n_jobs_per_analysis=n_jobs,
+            verbose=verbose,
+            use_mpi=use_mpi,
+            mpi_cores=mpi_cores
         )
 
         # Print results

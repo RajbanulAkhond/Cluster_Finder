@@ -265,7 +265,7 @@ def main():
             "formula": data["formula"],
             "num_clusters": len(data["clusters"]),
             "cluster_sizes": [cluster["size"] for cluster in data["clusters"]] if data["clusters"] else [],
-            "average_distance": np.mean([cluster["average_distance"] for cluster in data["clusters"]]) if data["clusters"] else 0,
+            "average_distance": float(np.mean([cluster["average_distance"] for cluster in data["clusters"]])) if data["clusters"] else 0,
             "rank_score": data.get("rank_score", 0)  # Include rank score here
         }
         for material_id, data in processed_data.items()

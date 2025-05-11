@@ -111,7 +111,7 @@ def postprocessed_clusters_dataframe(data_source):
             df[col] = df[col].apply(
                 lambda x: ast.literal_eval(x) if isinstance(x, str) else x
             )
-    
+
     # Process structure data in a more efficient way
     def process_structure(structure_data):
         if isinstance(structure_data, str):

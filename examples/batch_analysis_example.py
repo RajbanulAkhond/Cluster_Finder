@@ -15,7 +15,7 @@ def example_single_system():
     """Example of analyzing a single TM-anion system."""
     # Define your Materials Project API key
     # Ideally, this should be stored in an environment variable
-    API_KEY = os.environ.get("MP_API_KEY", "your_api_key_here")
+    API_KEY = os.environ.get("MP_API_KEY", "6rcVBNjGRVyfiGPYaLy2xVJNB9X8cN8q")
     
     # Create an output directory
     output_dir = Path("results")
@@ -23,8 +23,8 @@ def example_single_system():
     
     # Run analysis for a single system
     result = run_analysis(
-        primary_tm="Nb",  # Primary transition metal
-        anion="Cl",       # Anion
+        primary_tm="V",  # Primary transition metal
+        anion="O",       # Anion
         api_key=API_KEY,
         output_dir=output_dir,
         n_jobs=2,         # Use 2 parallel jobs for CPU-intensive tasks
@@ -32,7 +32,7 @@ def example_single_system():
         save_csv=True
     )
     
-    print(f"Analysis completed for Nb-Cl system")
+    print(f"Analysis completed for V-O system")
     print(f"Found {result['compounds_count']} compounds")
     print(f"Found {result.get('compounds_with_clusters_count', 0)} compounds with clusters")
     print(f"Time taken: {result.get('time_taken', 0):.2f} seconds")
@@ -47,7 +47,7 @@ def example_single_system():
 def example_batch_systems():
     """Example of analyzing multiple TM-anion systems in parallel."""
     # Define your Materials Project API key
-    API_KEY = os.environ.get("MP_API_KEY", "your_api_key_here")
+    API_KEY = os.environ.get("MP_API_KEY", "6rcVBNjGRVyfiGPYaLy2xVJNB9X8cN8q")
     
     # Create an output directory
     output_dir = Path("batch_results")
@@ -116,9 +116,9 @@ def example_cli_usage():
 
 if __name__ == "__main__":
     # Uncomment one of these to run the examples
-    # example_single_system()
+    example_single_system()
     # example_batch_systems()
-    example_cli_usage()
+    #example_cli_usage()
     
     print("\nRemember to set your Materials Project API key in the environment variable MP_API_KEY")
     print("For example: export MP_API_KEY=your_api_key_here")
