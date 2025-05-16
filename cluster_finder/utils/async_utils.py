@@ -8,6 +8,7 @@ retrieving data from the Materials Project API.
 import asyncio
 import aiohttp
 import logging
+import os
 from typing import List, Dict, Any, Optional, Union, Set
 from mp_api.client import MPRester
 
@@ -39,6 +40,40 @@ def get_event_loop():
         asyncio.set_event_loop(_event_loop)
         return _event_loop
 
+def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    """
+    Get API key from provided value or environment variable.
+    
+    Parameters:
+        api_key (str, optional): API key provided by the caller
+
+    Returns:
+        str: API key from argument or environment variable, or None if not found
+        
+    Raises:
+        ValueError: If the API key format is invalid (not 32 characters for new API)
+    """
+    if api_key:
+        key = api_key
+    else:
+        # Try to get API key from environment variable
+        key = os.environ.get("MAPI_KEY")
+    
+    # Check if we have a key and if it's in the right format
+    if key:
+        if len(key) == 16:
+            logger.warning(
+                "You're using a legacy 16-character Materials Project API key. "
+                "Please get a new 32-character API key from https://materialsproject.org/api"
+            )
+        elif len(key) != 32:
+            logger.warning(
+                f"API key has unexpected length ({len(key)} characters). "
+                "New Materials Project API keys should be 32 characters."
+            )
+    
+    return key
+
 async def async_batch_get_properties(
     material_ids: List[str],
     properties: List[str],
@@ -51,12 +86,15 @@ async def async_batch_get_properties(
     Parameters:
         material_ids (List[str]): List of Materials Project IDs
         properties (List[str]): List of properties to retrieve
-        api_key (str, optional): Materials Project API key
+        api_key (str, optional): Materials Project API key or None to use environment variable
         batch_size (int, optional): Number of materials to query in each batch
     
     Returns:
         Dict[str, Dict[str, Any]]: Dictionary mapping material IDs to their properties
     """
+    # Get API key from argument or environment variable
+    api_key = get_api_key(api_key)
+    
     results = {}
     # Create batches of material IDs
     batches = [material_ids[i:i+batch_size] for i in range(0, len(material_ids), batch_size)]
@@ -126,6 +164,9 @@ async def async_http_batch_query(
     Returns:
         Dict[str, Dict[str, Any]]: Dictionary mapping material IDs to their properties
     """
+    # Get API key from argument or environment variable
+    api_key = get_api_key(api_key)
+    
     results = {}
     # Create batches of material IDs
     batches = [material_ids[i:i+batch_size] for i in range(0, len(material_ids), batch_size)]
@@ -258,6 +299,9 @@ def search_compounds_batch(
     Returns:
         List[Any]: List of matching entries
     """
+    # Get API key from argument or environment variable
+    api_key = get_api_key(api_key)
+    
     # Define default fields to retrieve
     default_fields = ["material_id", "formula_pretty", "structure", "total_magnetization"]
     

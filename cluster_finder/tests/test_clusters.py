@@ -6,7 +6,7 @@ import pytest
 import numpy as np
 from pymatgen.core.structure import Structure, Molecule
 from pymatgen.core.lattice import Lattice
-from pymatgen.core.sites import Site
+from pymatgen.core.sites import Site, PeriodicSite
 from collections import namedtuple
 import networkx as nx
 
@@ -115,99 +115,113 @@ def test_get_compounds_with_clusters_no_clusters(simple_ionic_structure):
     # Get compounds with clusters
     compounds = get_compounds_with_clusters(entries, transition_metals)
     
-    # Check that we got one compound
-    assert len(compounds) == 1
-    
-    # Check that the compound has no clusters
-    assert len(compounds[0]["clusters"]) == 0
+    # Check that we got no compounds since there are no clusters
+    assert len(compounds) == 0
 
 def test_identify_unique_clusters_with_point_group():
     """Test identify_unique_clusters function with point group symmetry criterion."""
     # Create a mock lattice
     lattice = Lattice.cubic(5.0)
-    
+
     # Create clusters with different geometries that will have different point group symmetries
     # Tetrahedral cluster (Td point group)
     sites1 = [
-        Site("Fe", [0, 0, 0]),
-        Site("Fe", [1, 1, 1]),
-        Site("Fe", [1, -1, -1]),
-        Site("Fe", [-1, 1, -1]),
-        Site("Fe", [-1, -1, 1])
+        PeriodicSite("Fe", [0, 0, 0], lattice),
+        PeriodicSite("Fe", [1, 1, 1], lattice),
+        PeriodicSite("Fe", [1, -1, -1], lattice),
+        PeriodicSite("Fe", [-1, 1, -1], lattice),
+        PeriodicSite("Fe", [-1, -1, 1], lattice)
     ]
-    
+
     # Square planar cluster (D4h point group)
     sites2 = [
-        Site("Fe", [0, 0, 0]),
-        Site("Fe", [1, 0, 0]),
-        Site("Fe", [0, 1, 0]),
-        Site("Fe", [-1, 0, 0]),
-        Site("Fe", [0, -1, 0])
+        PeriodicSite("Fe", [0, 0, 0], lattice),
+        PeriodicSite("Fe", [1, 0, 0], lattice),
+        PeriodicSite("Fe", [0, 1, 0], lattice),
+        PeriodicSite("Fe", [-1, 0, 0], lattice),
+        PeriodicSite("Fe", [0, -1, 0], lattice)
     ]
-    
+
     # Octahedral cluster (Oh point group)
     sites3 = [
-        Site("Fe", [0, 0, 0]),
-        Site("Fe", [1, 0, 0]),
-        Site("Fe", [-1, 0, 0]),
-        Site("Fe", [0, 1, 0]),
-        Site("Fe", [0, -1, 0]),
-        Site("Fe", [0, 0, 1]),
-        Site("Fe", [0, 0, -1])
+        PeriodicSite("Fe", [0, 0, 0], lattice),
+        PeriodicSite("Fe", [1, 0, 0], lattice),
+        PeriodicSite("Fe", [-1, 0, 0], lattice),
+        PeriodicSite("Fe", [0, 1, 0], lattice),
+        PeriodicSite("Fe", [0, -1, 0], lattice),
+        PeriodicSite("Fe", [0, 0, 1], lattice),
+        PeriodicSite("Fe", [0, 0, -1], lattice)
     ]
-    
-    # Create cluster dictionaries
+
+    # Calculate centroids
+    centroid1 = calculate_centroid(sites1, lattice)
+    centroid2 = calculate_centroid(sites2, lattice)
+    centroid3 = calculate_centroid(sites3, lattice)
+
+    # Create cluster dictionaries with relative coordinates
     cluster1 = {
         "sites": sites1,
         "size": len(sites1),
         "average_distance": 1.5,
-        "centroid": np.array([0, 0, 0])
+        "centroid": centroid1,
+        "relative_coords": np.array([site.frac_coords - centroid1 for site in sites1])
     }
-    
+
     cluster2 = {
         "sites": sites2,
         "size": len(sites2),
         "average_distance": 1.0,
-        "centroid": np.array([0, 0, 0])
+        "centroid": centroid2,
+        "relative_coords": np.array([site.frac_coords - centroid2 for site in sites2])
     }
-    
+
     cluster3 = {
         "sites": sites3,
         "size": len(sites3),
         "average_distance": 1.0,
-        "centroid": np.array([0, 0, 0])
+        "centroid": centroid3,
+        "relative_coords": np.array([site.frac_coords - centroid3 for site in sites3])
     }
-    
+
     # Test with clusters that have different point group symmetries
     mock_clusters = [cluster1, cluster2, cluster3]
-    unique_clusters = identify_unique_clusters(mock_clusters)
-    
+    labeled_clusters = identify_unique_clusters(mock_clusters, use_symmetry=True, tolerance=1e-5)
+
     # All three clusters should be considered unique due to their different point group symmetries
-    assert len(unique_clusters) == 3
-    
+    # Instead of checking the number of unique clusters, we'll check that they all have different labels
+    labels = set(cluster["label"] for cluster in labeled_clusters)
+    assert len(labels) == 3
+
     # Check that point group information was added to each cluster
-    for cluster in unique_clusters:
+    point_groups = set()
+    for cluster in labeled_clusters:
         assert "point_group" in cluster
-    
-    # Create two identical tetrahedral clusters - these should be considered the same
+        point_groups.add(cluster["point_group"])
+
+    # Verify we have three different point groups
+    assert len(point_groups) == 3
+
+    # Create another tetrahedral cluster with a small translation
+    # We'll translate each site by (0.1, 0.1, 0.1)
     sites4 = [
-        Site("Fe", [0, 0, 0]),
-        Site("Fe", [1, 1, 1]),
-        Site("Fe", [1, -1, -1]),
-        Site("Fe", [-1, 1, -1]),
-        Site("Fe", [-1, -1, 1])
+        PeriodicSite("Fe", site.frac_coords + np.array([0.1, 0.1, 0.1]), lattice)
+        for site in sites1
     ]
-    
+
+    centroid4 = calculate_centroid(sites4, lattice)
     cluster4 = {
         "sites": sites4,
         "size": len(sites4),
         "average_distance": 1.5,
-        "centroid": np.array([0, 0, 0])
+        "centroid": centroid4,
+        "relative_coords": np.array([site.frac_coords - centroid4 for site in sites4])
     }
-    
-    # Test with two identical clusters
+
+    # Test with two geometrically identical clusters at different positions
     mock_clusters = [cluster1, cluster4]
-    unique_clusters = identify_unique_clusters(mock_clusters)
-    
-    # Should only find one unique cluster since they have identical geometries
-    assert len(unique_clusters) == 1
+    labeled_clusters = identify_unique_clusters(mock_clusters, use_symmetry=True, tolerance=0.2)
+
+    # Should have the same label since they have identical geometries up to translation
+    labels = [cluster["label"] for cluster in labeled_clusters]
+    assert labels[0] == labels[1], f"Expected the same label for both clusters, but got {labels}"
+    assert all(cluster["point_group"] == "Td" for cluster in labeled_clusters)

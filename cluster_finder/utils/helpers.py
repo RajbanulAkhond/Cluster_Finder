@@ -8,14 +8,17 @@ import numpy as np
 import re
 import requests
 import os
+import sys
+import signal
+import subprocess
 from typing import List, Dict, Any, Optional, Union
 from mp_api.client import MPRester
 
 # Import our async utilities
-from cluster_finder.utils.async_utils import get_properties_batch, search_compounds_batch
+from cluster_finder.utils.async_utils import get_properties_batch, search_compounds_batch, get_api_key
 
 
-def calculate_metal_distances(metals, api_key):
+def calculate_metal_distances(metals, api_key=None):
     """
     Calculate nearest-neighbor distances in pure elemental metals.
     
@@ -24,11 +27,14 @@ def calculate_metal_distances(metals, api_key):
     
     Parameters:
         metals (list): List of metal element symbols
-        api_key (str): Materials Project API key
+        api_key (str, optional): Materials Project API key or None to use environment variable
     
     Returns:
         dict: Dictionary mapping metal symbols to nearest-neighbor distances
     """
+    # Get API key from argument or environment variable
+    api_key = get_api_key(api_key)
+    
     from pymatgen.core.periodic_table import Element
     
     # Ensure metals are valid elements
@@ -189,6 +195,9 @@ def get_mp_property(material_id, property_name, api_key=None):
     Raises:
         ValueError: If the API request fails or the property cannot be retrieved
     """
+    # Get API key from argument or environment variable
+    api_key = get_api_key(api_key)
+    
     # Clean up material_id to ensure it's in the correct format
     if material_id is None:
         raise ValueError("Material ID cannot be None")
@@ -314,6 +323,9 @@ def get_mp_properties_batch(material_ids: List[str], properties: List[str], api_
         >>> properties = get_mp_properties_batch(['mp-149', 'mp-13'], ['energy_above_hull', 'band_gap'])
         >>> print(properties['mp-149']['band_gap'])
     """
+    # Get API key from argument or environment variable
+    api_key = get_api_key(api_key)
+    
     # Clean up material IDs
     clean_material_ids = []
     
@@ -334,3 +346,43 @@ def get_mp_properties_batch(material_ids: List[str], properties: List[str], api_
     
     # Use the batch property retrieval function
     return get_properties_batch(clean_material_ids, properties, api_key)
+
+
+def kill_resource_tracker():
+    """
+    Clean up multiprocessing resources including loky backend temporary files.
+    This prevents resource tracker warnings about leaked semaphore objects.
+    """
+    import sys
+    import os
+    import glob
+    import tempfile
+    import shutil
+    import multiprocessing
+
+    try:
+        # Clean up loky backend temporary files
+        tmp_pattern = os.path.join(tempfile.gettempdir(), "loky-*")
+        for folder in glob.glob(tmp_pattern):
+            try:
+                if os.path.exists(folder):
+                    shutil.rmtree(folder, ignore_errors=True)
+            except:
+                pass
+
+        # Python version-dependent cleanup
+        if sys.version_info >= (3, 8):
+            try:
+                # Force cleanup of resource tracker process
+                from multiprocessing import resource_tracker
+                if hasattr(resource_tracker, "_resource_tracker"):
+                    resource_tracker._resource_tracker = None
+            except:
+                pass
+
+        # Force cleanup of any remaining semaphores
+        if hasattr(multiprocessing, "_cleanup"):
+            multiprocessing._cleanup()
+
+    except:
+        pass  # Silently ignore any cleanup errors

@@ -15,10 +15,18 @@ import time
 import io
 import sys
 import re
+import tempfile
+import shutil
+import glob
+import warnings
+import signal
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Union, Tuple
 import logging
+import atexit
+import gc
+import multiprocessing
 
 # Import cluster_finder package
 from cluster_finder.utils.helpers import (
@@ -83,46 +91,105 @@ def cleanup_joblib_resources():
         import tempfile
         import shutil
         import glob
+        import warnings
+        import sys
+        import os
+        import atexit
+        import signal
+        import time
         
-        # Find and clean up any joblib temp folders in the system temp directory
-        tmp_pattern = os.path.join(tempfile.gettempdir(), "joblib_memmapping_folder_*")
-        for folder in glob.glob(tmp_pattern):
-            try:
-                if os.path.exists(folder):
-                    logger.debug(f"Cleaning up joblib temporary folder: {folder}")
-                    shutil.rmtree(folder, ignore_errors=True)
-            except Exception as e:
-                logger.debug(f"Failed to clean up folder {folder}: {e}")
+        # Suppress specific resource tracker warnings
+        warnings.filterwarnings("ignore", category=UserWarning, message=".*resource_tracker.*")
+        warnings.filterwarnings("ignore", category=UserWarning, message=".*loky.*")
+        warnings.filterwarnings("ignore", category=UserWarning, message=".*sempahores might leak.*")
+        warnings.filterwarnings("ignore", category=UserWarning, message=".*Some resources might leak.*")
         
-        # Release any semaphores or other resources that might be held
-        # This helps with the "leaked semlock objects" warnings
+        # Clean up loky backend first
         try:
-            # Try to access the semaphore tracker in a version-agnostic way
+            from joblib.externals.loky import get_reusable_executor
+            executor = get_reusable_executor(timeout=1)
+            executor.shutdown(wait=True, kill_workers=True)
+        except Exception as e:
+            logger.debug(f"Error shutting down loky executor: {e}")
+            
+        # Find and clean up any joblib temp folders in the system temp directory
+        tmp_patterns = [
+            os.path.join(tempfile.gettempdir(), "joblib_memmapping_folder_*"),
+            os.path.join(tempfile.gettempdir(), "loky-*"),
+            os.path.join("/tmp", "joblib_memmapping_folder_*"),
+            os.path.join("/tmp", "loky-*"),
+            os.path.join(os.path.expanduser("~"), "joblib_memmapping_folder_*")
+        ]
+        
+        for pattern in tmp_patterns:
+            for folder in glob.glob(pattern):
+                try:
+                    if os.path.exists(folder):
+                        logger.debug(f"Cleaning up joblib temporary folder: {folder}")
+                        # Try multiple times with exponential backoff
+                        for attempt in range(3):
+                            try:
+                                shutil.rmtree(folder, ignore_errors=True)
+                                if not os.path.exists(folder):
+                                    break
+                            except Exception:
+                                time.sleep(0.5 * (2 ** attempt))
+                except Exception as e:
+                    logger.debug(f"Failed to clean up folder {folder}: {e}")
+        
+        # Reset joblib's internal state
+        try:
+            from joblib.parallel import Parallel, parallel_backend
+            Parallel()._managed_pool = None
+            with parallel_backend('threading', n_jobs=1):  # Force switch to threading backend
+                pass
+        except Exception as e:
+            logger.debug(f"Error resetting joblib state: {e}")
+
+        # Clean up multiprocessing resources
+        try:
             import multiprocessing as mp
             if hasattr(mp, '_cleanup'):
                 mp._cleanup()
-                
-            # For newer Python versions
-            if hasattr(mp, 'resource_tracker') and hasattr(mp.resource_tracker, '_resource_tracker'):
-                tracker = mp.resource_tracker._resource_tracker
-                if tracker is not None and hasattr(tracker, 'ensure_running'):
-                    tracker.ensure_running()
-        except (ImportError, AttributeError):
-            pass
+            
+            # Handle resource tracker
+            if hasattr(mp, 'resource_tracker'):
+                tracker_mod = mp.resource_tracker
+                if hasattr(tracker_mod, '_resource_tracker') and tracker_mod._resource_tracker is not None:
+                    try:
+                        # Try to stop the resource tracker cleanly
+                        tracker = tracker_mod._resource_tracker
+                        if hasattr(tracker, '_stop'):
+                            tracker._stop = True
+                        # Clear any remaining resources
+                        if hasattr(tracker, '_resources'):
+                            tracker._resources.clear()
+                        # Reset the tracker
+                        tracker_mod._resource_tracker = None
+                    except Exception as e:
+                        logger.debug(f"Error cleaning resource tracker: {e}")
+        except Exception as e:
+            logger.debug(f"Error cleaning multiprocessing resources: {e}")
+
+        # Force garbage collection multiple times
+        for _ in range(3):
+            gc.collect()
         
-        # Force Python garbage collection to release resources
-        import gc
-        gc.collect()
+        # Small sleep to allow processes to terminate
+        time.sleep(0.5)
         
     except Exception as cleanup_err:
         logger.debug(f"Error during joblib resource cleanup: {cleanup_err}")
+
+# Register cleanup function to run at exit
+atexit.register(cleanup_joblib_resources)
 
 def process_compound_visualization(idx, row_data, logger):
     """Process visualization data for a single compound."""
     try:
         material_id = row_data['material_id']
         formula = row_data['formula']
-        logger.info(f"Processing visualization data for {formula} ({material_id})")
+        
         
         # Convert the structure data to a Structure object
         structure_data = row_data['structure']
@@ -212,7 +279,6 @@ def process_compound_visualization(idx, row_data, logger):
         except Exception as e:
             logger.warning(f"Error processing supercell for {material_id}: {e}")
         
-        logger.info(f"Completed visualization data processing for {formula}")
         return material_id, visualization_data
         
     except Exception as e:
@@ -334,9 +400,17 @@ def run_analysis(
             verbose=True
         )
         
+        # Store structures before post-processing
+        structure_dict = {row['material_id']: row['structure'] 
+                        for _, row in compounds_df.iterrows()}
+        
         # Post-process the dataframe to add additional calculated properties
         logger.info("Post-processing compounds dataframe...")
         processed_df = postprocessed_clusters_dataframe(compounds_df)
+        
+        # Restore structures after post-processing
+        processed_df['structure'] = processed_df['material_id'].map(structure_dict)
+        
     except Exception as e:
         logger.error(f"Error creating compounds dataframe: {e}")
         return {"status": "error", "error": str(e), "system": system_name, "step": "dataframe_creation"}
@@ -382,7 +456,7 @@ def run_analysis(
         summary_df = ranked_df.drop([
             'magnetization', 'conventional_cluster_lattice', 'cluster_sites',
             'point_groups_dict', 'max_point_group_order', 'highest_point_group',
-            'space_group_order'
+            'space_group_order','structure'
         ], axis=1, errors='ignore')
         
         # Save the summary dataframe to CSV if requested
@@ -407,11 +481,6 @@ def run_analysis(
         try:
             from joblib import Parallel, delayed
             
-            # Define the function to process a single compound
-            def process_compound_visualization(idx, row_data, logger):
-                """Process visualization data for a single compound."""
-                # ...existing code...
-            
             # Process compounds in parallel
             logger.info(f"Starting parallel processing with {n_jobs} workers")
             # Convert the dataframe to a list of tuples for parallel processing
@@ -427,8 +496,6 @@ def run_analysis(
             for material_id, data in results:
                 if data is not None:
                     processed_data[material_id] = data
-            
-            logger.info(f"Processed visualization data for {len(processed_data)} compounds")
             
         except ImportError:
             logger.warning("joblib not available, falling back to sequential processing")

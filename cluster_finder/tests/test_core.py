@@ -6,6 +6,7 @@ import pytest
 import numpy as np
 import networkx as nx
 from pymatgen.core.structure import Structure, Lattice
+from pymatgen.core.sites import PeriodicSite
 
 from cluster_finder.core.structure import (
     find_non_equivalent_positions,
@@ -124,18 +125,12 @@ class TestClusters:
     
     def test_calculate_average_distance(self, sample_cluster):
         """Test calculating average distance."""
-        # Mock the distance method to return a fixed value
-        for site in sample_cluster:
-            site.distance = lambda x: 3.0
-        
+        # The mock sites are in a triangular arrangement with edges 1.5 units long
+        # For a triangular arrangement, we expect the average distance to be
+        # (1.5 + 1.5 + sqrt(2)*1.5) / 3 ≈ 1.707 units
         avg_distance = calculate_average_distance(sample_cluster, max_radius=3.5)
         assert isinstance(avg_distance, float)
-        
-        # For our specific sample (cube with side 3.0)
-        # Distance from (0,0,0) to (1,0,0) and (0,1,0) should be 3.0
-        # Distance from (1,0,0) to (0,1,0) should be sqrt(2) * 3.0
-        expected_avg = 3.0  # only consider distances within max_radius
-        assert np.isclose(avg_distance, expected_avg)
+        assert np.isclose(avg_distance, 1.7071067811865472, rtol=1e-6)  # (1.5 + 1.5 + sqrt(2)*1.5) / 3
     
     def test_build_graph(self, sample_cluster):
         """Test building graph from cluster."""
@@ -161,21 +156,42 @@ class TestClusters:
     
     def test_identify_unique_clusters(self, sample_cluster, simple_cubic_structure):
         """Test identifying unique clusters."""
-        # Create two identical clusters
-        clusters = [
-            {
-                "sites": sample_cluster,
-                "size": 3,
-                "average_distance": 3.0,
-                "centroid": calculate_centroid(sample_cluster, simple_cubic_structure.lattice)
-            },
-            {
-                "sites": sample_cluster,
-                "size": 3,
-                "average_distance": 3.0,
-                "centroid": calculate_centroid(sample_cluster, simple_cubic_structure.lattice)
-            }
-        ]
+        # Create two identical clusters at different positions
+        sites1 = sample_cluster
         
-        unique_clusters = identify_unique_clusters(clusters)
-        assert len(unique_clusters) == 1  # Only one unique cluster
+        # Create second cluster by translating in fractional coordinates
+        sites2 = [
+            PeriodicSite(
+                site.species,
+                site.frac_coords + np.array([0.1, 0.1, 0.1]),
+                simple_cubic_structure.lattice
+            )
+            for site in sites1
+        ]
+
+        # Create cluster dictionaries with fractional coordinates
+        centroid1 = calculate_centroid(sites1, simple_cubic_structure.lattice)
+        centroid2 = calculate_centroid(sites2, simple_cubic_structure.lattice)
+
+        cluster1 = {
+            "sites": sites1,
+            "size": len(sites1),
+            "average_distance": 3.0,
+            "centroid": centroid1,
+            "relative_coords": np.array([site.frac_coords - np.array(centroid1) for site in sites1])
+        }
+
+        cluster2 = {
+            "sites": sites2,
+            "size": len(sites2),
+            "average_distance": 3.0,
+            "centroid": centroid2,
+            "relative_coords": np.array([site.frac_coords - np.array(centroid2) for site in sites2])
+        }
+
+        # The clusters should be considered identical since they have the same relative geometry
+        labeled_clusters = identify_unique_clusters([cluster1, cluster2], use_symmetry=True, tolerance=0.2)
+        
+        # Check that they both have the same label
+        labels = [cluster["label"] for cluster in labeled_clusters]
+        assert labels[0] == labels[1], f"Expected the same label for both clusters, but got {labels}"

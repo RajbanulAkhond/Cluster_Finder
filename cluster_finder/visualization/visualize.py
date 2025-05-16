@@ -16,6 +16,12 @@ from ase.data import chemical_symbols
 import numpy as np
 import matplotlib.colors as mcolors
 from ase import Atom
+import warnings
+
+# Suppress specific NumPy warnings from ASE's matrix operations
+warnings.filterwarnings('ignore', category=RuntimeWarning, message='divide by zero encountered in matmul')
+warnings.filterwarnings('ignore', category=RuntimeWarning, message='overflow encountered in matmul')
+warnings.filterwarnings('ignore', category=RuntimeWarning, message='invalid value encountered in matmul')
 
 
 def visualize_graph(graph, structure=None, tm_indices=None, material_id=None, formula=None, use_3d=False):

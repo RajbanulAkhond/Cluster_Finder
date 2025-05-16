@@ -4,23 +4,19 @@ Cluster Finder is a Python package for finding, analyzing, and visualizing atomi
 
 ## Features
 
-- Find clusters of atoms in crystal structures based on connectivity
+- Find clusters of TM atoms in crystal structures based on connectivity
 - Analyze cluster properties (size, average distances, etc.)
 - Visualize clusters and their connectivity
 - Export results to various formats (CIF, CSV, JSON)
 - Advanced cluster ranking with customizable property weights 
 - Command-line interface for easy usage
+- Batch processing for multiple structures using multiprocessing or multithreading
+- Parallelized analysis for large datasets
 - Extensible API for integration into other projects
 - Comprehensive test suite 
 - Detailed cluster statistics and summary reports
 
 ## Installation
-
-### From PyPI (coming soon)
-
-```bash
-pip install cluster-finder
-```
 
 ### From Source
 
@@ -43,6 +39,8 @@ pandas==2.2.3
 mp-api==0.45.3
 pytest==8.0.2
 pydantic>=2.0.0
+typer>=0.9.0
+rich>=13.0.0
 ```
 
 These versions are pinned in the `requirements.txt` file. To install these specific versions:
@@ -79,6 +77,24 @@ Rank clusters with custom properties:
 
 ```bash
 cluster-finder rank results.csv --custom-props band_gap formation_energy_per_atom --weights "band_gap:2.0,formation_energy_per_atom:-1.5"
+```
+
+Process multiple structure files in batch mode:
+
+```bash
+cluster-finder batch input_directory/ --pattern "*.cif" --output results/
+```
+
+Fetch a structure from Materials Project:
+
+```bash
+cluster-finder get-material mp-149 --conventional --api-key YOUR_API_KEY
+```
+
+Generate summary statistics for multiple compounds:
+
+```bash
+cluster-finder summary results_clusters.json --retrieve-missing --api-key YOUR_API_KEY
 ```
 
 ### Python API Usage
@@ -139,13 +155,22 @@ For more detailed usage examples and API documentation, see the [example scripts
 
 - `core`: Core functionality for finding and analyzing clusters
   - `structure.py`: Structure manipulation and cluster identification
+  - `clusters.py`: Cluster finding and analysis
+  - `graph.py`: Graph creation and connectivity analysis
+  - `simple_search.py`: Fast search algorithms
   - `utils.py`: Statistical analysis and data processing
 - `visualization`: Functions for visualizing clusters and structures
 - `analysis`: Advanced analysis of clusters and their properties
+  - `analysis.py`: Core analysis functionality
+  - `batch.py`: Parallel batch processing
   - `postprocess.py`: Cluster ranking and classification
   - `dataframe.py`: Cluster data processing utilities
 - `io`: Input/output utilities for various file formats
 - `utils`: Helper functions and utilities
+  - `async_utils.py`: Asynchronous processing
+  - `config_utils.py`: Configuration management
+  - `logger.py`: Logging functionality
+  - `system_compat.py`: System compatibility checks
 
 ## Advanced Usage
 
@@ -185,6 +210,16 @@ Properties considered in ranking:
   - Any material property available in the DataFrame or retrievable from the Materials Project
   - Set weights based on your research priorities (+ve weights favor higher values, -ve weights favor lower values)
 
+### Advanced Batch Analysis
+
+For large-scale analysis of multiple systems, use the advanced batch analysis features:
+
+```bash
+cluster-finder analyze batch --api-key YOUR_API_KEY --output-dir results/ --tms "Fe,Co,Ni" --anions "O,S" --max-workers 8 --n-jobs 4
+```
+
+This will analyze Fe-O, Fe-S, Co-O, Co-S, Ni-O, and Ni-S systems in parallel, retrieving data from the Materials Project.
+
 ## Development
 
 ### Running Tests
@@ -222,16 +257,16 @@ pylint cluster_finder
 
 ## Recent Updates
 
+- Added advanced batch analysis with parallel processing capabilities
+- Improved Materials Project API integration with the latest mp-api client
+- Enhanced cluster visualization options including 3D graph views
+- Added direct retrieval of materials from Materials Project API
 - Enhanced cluster ranking with support for custom properties and weights
 - Improved materials property retrieval from the Materials Project API
 - Added normalization of properties for balanced ranking
 - Expanded test coverage for ranking functionalities
 - Improved package structure and organization
 - Enhanced documentation with comprehensive docstrings
-- Fixed JSON serialization of PeriodicSite objects
-- Updated cluster summary statistics with detailed output
-- Added test structure for examples
-- Fixed entry points in setup.py
 - All tests passing successfully
 
 ## References
@@ -254,4 +289,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Author
 
-- Md. Rajbanul Akhond (makhond@iu.edu)
+- Md. Rajbanul Akhond (mdakhond@iu.edu)

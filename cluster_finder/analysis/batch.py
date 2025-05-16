@@ -54,8 +54,6 @@ def run_analysis_wrapper(primary_tm, anion, api_key, output_dir, config, n_jobs,
     try:
         # Get a properly configured logger for this worker process
         process_logger = get_logger(f"cluster_finder.worker.{primary_tm}-{anion}")
-        if _worker_verbose:
-            process_logger.info(f"Starting analysis for {primary_tm}-{anion} system")
         
         # Convert Path object to string for serialization
         if isinstance(output_dir, Path):
@@ -95,55 +93,116 @@ def cleanup_multiprocessing_resources(logger):
     import gc
     import sys
     import multiprocessing
+    import os
+    import threading
+    import queue
+    import warnings
+    import time
+    import signal
 
-    try:
-        # Find and clean up any joblib temp folders in the system temp directory
-        tmp_pattern = os.path.join(tempfile.gettempdir(), "joblib_memmapping_folder_*")
-        for folder in glob.glob(tmp_pattern):
-            try:
-                if os.path.exists(folder):
-                    logger.info(f"Cleaning up joblib temporary folder: {folder}")
-                    shutil.rmtree(folder, ignore_errors=True)
-            except Exception as e:
-                logger.warning(f"Failed to clean up folder {folder}: {e}")
+    # Use a queue to track completion
+    cleanup_done = queue.Queue()
 
-        # Python version-dependent cleanup
-        if sys.version_info >= (3, 8):
-            # For Python 3.8+, use the resource tracker
+    def cleanup_worker():
+        try:
+            # Temporarily suppress resource tracker warnings
+            warnings.filterwarnings("ignore", category=UserWarning, 
+                                 module="joblib.externals.loky.backend.resource_tracker")
+            
+            # First clean up loky backend resources
             try:
-                import multiprocessing.resource_tracker
-                if hasattr(multiprocessing.resource_tracker, '_resource_tracker'):
-                    tracker = multiprocessing.resource_tracker._resource_tracker
-                    if tracker is not None:
-                        logger.info("Cleaning up multiprocessing resources")
-                        if hasattr(tracker, 'ensure_running'):
-                            tracker.ensure_running()
-            except ImportError:
+                from joblib.externals.loky import get_reusable_executor
+                executor = get_reusable_executor(timeout=1)
+                executor.shutdown(wait=True, kill_workers=True)
+            except Exception:
                 pass
-        else:
-            # For older Python versions, try direct semaphore cleanup
+
+            # Clean up temp folders with retry mechanism
+            patterns = [
+                os.path.join(tempfile.gettempdir(), "joblib_memmapping_folder_*"),
+                os.path.join(tempfile.gettempdir(), "loky-*"),
+                os.path.join("/tmp", "joblib_memmapping_folder_*"),
+                os.path.join("/tmp", "loky-*")
+            ]
+            
+            for pattern in patterns:
+                for folder in glob.glob(pattern):
+                    if os.path.exists(folder):
+                        for attempt in range(3):
+                            try:
+                                shutil.rmtree(folder, ignore_errors=True)
+                                if not os.path.exists(folder):
+                                    break
+                            except Exception:
+                                time.sleep(0.5 * (2 ** attempt))
+
+            # Explicitly clean up joblib resources
+            try:
+                from joblib.parallel import Parallel, parallel_backend
+                Parallel()._managed_pool = None
+                with parallel_backend('threading', n_jobs=1):
+                    pass
+            except Exception:
+                pass
+                
+            # Force terminate any remaining child processes
+            active_children = multiprocessing.active_children()
+            for child in active_children:
+                try:
+                    child.terminate()
+                    child.join(timeout=0.5)
+                except:
+                    # If join times out, force kill
+                    if sys.platform != 'win32':  # POSIX systems
+                        try:
+                            os.kill(child.pid, signal.SIGKILL)
+                        except:
+                            pass
+
+            # Clean up multiprocessing resources
             try:
                 multiprocessing.util._cleanup()
             except:
                 pass
 
-        # Clean up remaining processes
-        if hasattr(multiprocessing, 'active_children'):
-            active_children = multiprocessing.active_children()
-            if active_children:
-                logger.info(f"Terminating {len(active_children)} remaining child processes...")
-                for child in active_children:
+            # Handle resource tracker
+            if hasattr(multiprocessing, 'resource_tracker'):
+                tracker_mod = multiprocessing.resource_tracker
+                if hasattr(tracker_mod, '_resource_tracker') and tracker_mod._resource_tracker is not None:
                     try:
-                        child.terminate()
-                        child.join(timeout=1.0)
+                        # Try to stop the resource tracker cleanly
+                        tracker = tracker_mod._resource_tracker
+                        if hasattr(tracker, '_stop'):
+                            tracker._stop = True
+                        # Clear any remaining resources
+                        if hasattr(tracker, '_resources'):
+                            tracker._resources.clear()
+                        # Reset the tracker
+                        tracker_mod._resource_tracker = None
                     except Exception:
                         pass
 
-        # Force garbage collection
-        gc.collect()
+            # Force garbage collection multiple times
+            for _ in range(3):
+                gc.collect()
+            
+            # Signal completion
+            cleanup_done.put(True)
+            
+        except Exception as cleanup_err:
+            logger.debug(f"Non-critical cleanup error: {cleanup_err}")
+            cleanup_done.put(False)
 
-    except Exception as cleanup_err:
-        logger.warning(f"Error during resource cleanup: {cleanup_err}")
+    # Start cleanup in a separate thread with a timeout
+    cleanup_thread = threading.Thread(target=cleanup_worker)
+    cleanup_thread.daemon = True
+    cleanup_thread.start()
+    
+    try:
+        # Wait up to 5 seconds for cleanup
+        cleanup_done.get(timeout=5.0)
+    except queue.Empty:
+        logger.debug("Cleanup timed out, but continuing execution")
 
 def run_batch_analysis(
     api_key: str,
@@ -159,26 +218,12 @@ def run_batch_analysis(
     use_mpi: bool = False,
     mpi_cores: Optional[int] = None
 ) -> Dict[str, Any]:
-    """
-    Run analysis in parallel for multiple TM-anion systems.
+    """Run batch analysis on multiple TM-anion systems."""
+    from ..utils.helpers import kill_resource_tracker
     
-    Args:
-        api_key: Materials Project API key
-        output_dir: Base directory to save all outputs
-        config_path: Path to configuration file (optional)
-        specific_tms: List of specific transition metals to analyze (overrides config)
-        specific_anions: List of specific anions to analyze (overrides config)
-        max_workers: Maximum number of parallel system analyses
-        save_pdf: Whether to save PDF reports
-        save_csv: Whether to save CSV data
-        n_jobs_per_analysis: Number of parallel jobs for each analysis
-        verbose: Show detailed logging information
-        use_mpi: Whether to use multiprocessing instead of threading
-        mpi_cores: Number of CPU cores to use for multiprocessing (None = use all available)
-        
-    Returns:
-        Dictionary containing summary results for all analyses
-    """
+    # Clean up any existing resources before starting
+    kill_resource_tracker()
+    
     # Validate API key
     if not api_key:
         raise InvalidInputError("Materials Project API key is required")
@@ -267,9 +312,7 @@ def run_batch_analysis(
             if verbose:
                 logger.info(f"Submitting analysis for {primary_tm}-{anion}")
             
-            # When using multiprocessing, use the wrapper function to avoid pickling issues
             if use_mpi:
-                # For multiprocessing, use a simpler function interface to avoid pickling RLock objects
                 future = executor.submit(
                     run_analysis_wrapper,
                     primary_tm,
@@ -282,9 +325,8 @@ def run_batch_analysis(
                     save_csv
                 )
             else:
-                # For threading, use the standard function
                 future = executor.submit(
-                    run_analysis,
+                    run_analysis_wrapper,
                     primary_tm=primary_tm,
                     anion=anion,
                     api_key=api_key,
@@ -427,23 +469,20 @@ def run_batch_analysis(
             if use_mpi and executor is not None:
                 logger.info("Cleaning up multiprocessing resources...")
                 
-                # Cancel any pending futures
+                # Cancel any pending futures first
                 for future in futures:
                     if not future.done():
                         future.cancel()
                 
-                # Wait briefly for futures to complete
-                wait(futures, timeout=2.0)
-                
-                # Shutdown the executor with wait=True to ensure proper cleanup
-                executor.shutdown(wait=True)
+                # Force immediate shutdown without waiting
+                executor.shutdown(wait=False)
                 
                 # Clean up all multiprocessing resources using the dedicated function
                 cleanup_multiprocessing_resources(logger)
                 
             elif executor is not None:
                 # For thread executor, just shutdown normally
-                executor.shutdown(wait=True)
+                executor.shutdown(wait=False)
             
             # Calculate and add final stats to summary
             end_time = time.time()
@@ -466,8 +505,9 @@ def run_batch_analysis(
             console.print(f"\n[bold green]Batch analysis completed in {elapsed_time:.2f} seconds[/bold green]")
             console.print(f"[bold]Results saved to {output_dir}[/bold]\n")
             
-            # Note: We don't display a results table here anymore
-            # The CLI will handle displaying the results table to avoid duplication
+            # Kill any remaining resource tracker processes at the very end
+            from cluster_finder.utils.helpers import kill_resource_tracker
+            kill_resource_tracker()
             
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")

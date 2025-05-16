@@ -75,11 +75,31 @@ if not check_lzma_support():
     logger.warning("Installation will continue, but you may encounter errors when running the package.")
     logger.warning("It's strongly recommended to fix the LZMA issue before using cluster-finder.\n")
 
+# Get long description from README.md if it exists
+try:
+    with open("README.md", "r", encoding="utf-8") as fh:
+        long_description = fh.read()
+except FileNotFoundError:
+    long_description = "A package for finding and analyzing atomic clusters in crystal structures"
+
 setup(
     name="cluster_finder",
     version="0.1.0",
+    author="Md. Rajbanul Akhond",
+    author_email="makhond@iu.edu",
+    description="A package for finding and analyzing atomic clusters in crystal structures",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    url="https://github.com/RajbanulAkhond/Cluster_Finder",
     packages=find_packages(),
     include_package_data=True,
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.11",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+    ],
+    python_requires=">=3.11.11",
     install_requires=[
         "numpy>=1.21",
         "matplotlib>=3.4",
@@ -87,16 +107,28 @@ setup(
         "networkx>=2.6",
         "pandas>=1.3",
         "mp-api>=0.33.3",
+        "pydantic>=1.10.8,<3.0.0",
+        "ase==3.22.1",
+        "aiohttp>=3.8.0,<4.0.0",
+        "asyncio>=3.4.3,<4.0.0",
         "typer>=0.9.0",
         "rich>=13.0.0",
-        "joblib>=1.3.0",
-        "pyyaml>=6.0.0",
+        "joblib>=1.3.0,<2.0.0",
+        "pyyaml>=6.0.0,<7.0.0",
         "scipy>=1.7",
         "tqdm>=4.65.0",
-        "aiohttp>=3.8.0",
-        "ase>=3.22.0",
         "distro>=1.8.0"
     ],
+    extras_require={
+        "dev": [
+            "pytest>=7.4.0,<9.0.0",
+            "pytest-cov>=2.12.0",
+            "black>=22.1.0",
+            "isort>=5.10.0",
+            "pylint>=2.12.0",
+            "mypy>=0.910",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "cluster-finder=cluster_finder.cli:app"

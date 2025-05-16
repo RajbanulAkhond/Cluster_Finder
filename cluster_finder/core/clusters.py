@@ -306,62 +306,69 @@ def identify_unique_clusters(clusters, use_symmetry=True, tolerance=1e-5):
     Returns:
         list: List of all clusters with metadata and consistent labels
     """
-    # Create a mapping of cluster_key -> label
-    cluster_key_to_label = {}
-    label_count = 0
-    labeled_clusters = []
+    from collections import defaultdict
     
+    # First, prepare all clusters with the necessary properties
     for cluster in clusters:
-        # Always consider basic properties (size, distance, elements)
-        atom_types = sorted([site.specie.symbol for site in cluster["sites"]])
-        basic_key = (
-            cluster["size"],
-            round(cluster["average_distance"], 3),
-            tuple(atom_types)
-        )
+        # Calculate relative coordinates from centroid - this makes it translation-invariant
+        cart_coords = np.array([site.coords for site in cluster["sites"]])
+        centroid = np.mean(cart_coords, axis=0)
+        rel_coords = cart_coords - centroid
         
-        # Optionally add point group symmetry for more precise classification
-        if use_symmetry:
-            # Calculate point group symmetry if not already present
-            if "point_group" not in cluster:
-                # Create a molecule object for symmetry analysis
-                species = [site.specie for site in cluster["sites"]]
-                cartesian_coords = [site.coords for site in cluster["sites"]]
-                molecule = Molecule(species, cartesian_coords)
-                pga = PointGroupAnalyzer(molecule)
-                point_group = pga.get_pointgroup()
-                point_group_symbol = point_group.sch_symbol
-                cluster["point_group"] = point_group_symbol
-            else:
-                point_group_symbol = cluster["point_group"]
+        # Calculate distance matrix - this is invariant to translation
+        n_sites = len(cluster["sites"])
+        dist_matrix = np.zeros((n_sites, n_sites))
+        for i in range(n_sites):
+            for j in range(i+1, n_sites):
+                dist = np.linalg.norm(cart_coords[i] - cart_coords[j])
+                dist_matrix[i,j] = dist_matrix[j,i] = dist
                 
-            # Create a graph to analyze connectivity
-            conn_graph = build_graph(cluster["sites"], cluster["average_distance"] * 1.1)
-            edge_count = len(conn_graph.edges())
-            
-            # Extended key including symmetry and connectivity
-            cluster_key = (basic_key, edge_count, point_group_symbol)
-        else:
-            # Use only basic properties for the key
-            cluster_key = basic_key
+        # Store these for comparison
+        cluster["relative_coords"] = rel_coords
+        cluster["distance_matrix"] = dist_matrix
         
-        # Create a copy of the cluster to avoid modifying the original
-        cluster_with_label = cluster.copy()
-        
-        # If this cluster key is already seen, use the existing label
-        # Otherwise, create a new label
-        if cluster_key not in cluster_key_to_label:
-            label = f"X{label_count}"
-            cluster_key_to_label[cluster_key] = label
-            label_count += 1
-        else:
-            label = cluster_key_to_label[cluster_key]
-        
-        # Assign the label to the cluster
-        cluster_with_label["label"] = label
-        labeled_clusters.append(cluster_with_label)
+        # Calculate point group if not already present
+        if use_symmetry and "point_group" not in cluster:
+            species = [site.specie for site in cluster["sites"]]
+            molecule = Molecule(species, cart_coords)
+            pga = PointGroupAnalyzer(molecule)
+            cluster["point_group"] = pga.get_pointgroup().sch_symbol
     
-    return labeled_clusters
+    # Group clusters by size and point group first (quick filters)
+    size_groups = defaultdict(list)
+    for i, cluster in enumerate(clusters):
+        key = (cluster["size"], cluster["point_group"] if use_symmetry and "point_group" in cluster else "")
+        size_groups[key].append(cluster)
+    
+    # Within each size group, compare distance matrices to find truly unique clusters
+    processed_clusters = []
+    label_count = 0
+    
+    for size_group in size_groups.values():
+        for i, cluster in enumerate(size_group):
+            if "label" in cluster:
+                continue  # Already processed
+                
+            # This will be a new unique cluster
+            cluster["label"] = f"X{label_count}"
+            label_count += 1
+            processed_clusters.append(cluster)
+            
+            # Compare with all other clusters in this group that haven't been processed
+            for j in range(i+1, len(size_group)):
+                other = size_group[j]
+                if "label" in other:
+                    continue  # Already processed
+                
+                # Compare distance matrices with increased tolerance to handle floating point precision
+                if np.allclose(cluster["distance_matrix"], other["distance_matrix"], 
+                               rtol=tolerance, atol=tolerance*10):
+                    # These clusters are geometrically equivalent
+                    other["label"] = cluster["label"]
+                    processed_clusters.append(other)
+    
+    # Return all clusters
+    return clusters
 
 
 def get_compounds_with_clusters(entries, transition_metals, primary_transition_metal=None):

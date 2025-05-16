@@ -56,6 +56,7 @@ from .io.fileio import (
 )
 from .core.utils import cluster_summary_stat
 from .utils.helpers import get_transition_metals, get_mp_property
+from .utils.async_utils import get_api_key
 from .analysis.dataframe import cluster_compounds_dataframe
 from .analysis.postprocess import rank_clusters
 from .utils.config_utils import load_config, get_element_combinations
@@ -101,14 +102,22 @@ def find_command(
     min_size: int = typer.Option(2, "--min-size", "-s", help="Minimum cluster size (default: 2)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file prefix (default: based on input filename)"),
     no_vis: bool = typer.Option(False, "--no-vis", help="Disable visualization"),
-    format: str = typer.Option("json", "--format", "-f", help="Output format: json, csv, or both")
+    format: str = typer.Option("json", "--format", "-f", help="Output format: json, csv, or both"),
+    show_warnings: bool = typer.Option(False, "--show-warnings", help="Show pymatgen parsing warnings (normally suppressed)")
 ):
     """Find clusters in a structure."""
     try:
         validate_input_file(structure_file)
         
-        # Load structure
-        structure = Structure.from_file(structure_file)
+        # Load structure, suppressing warnings by default unless show_warnings is True
+        if not show_warnings:
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*fractional coordinates rounded.*")
+                structure = Structure.from_file(structure_file)
+        else:
+            structure = Structure.from_file(structure_file)
+            
         console.print(f"\nFound {len(structure)} sites in {structure.composition.reduced_formula}")
         
         # Use default elements if none provided
@@ -443,10 +452,18 @@ def batch_command(
         
         # Process all matching files
         all_results = []
+        had_errors = False
+        
         for file_path in Path(input_dir).glob(pattern):
             console.print(f"\nProcessing {file_path}...")
             
             try:
+                # Load structure first to catch invalid CIF files early
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message=".*fractional coordinates rounded.*")
+                    structure = Structure.from_file(str(file_path))
+                
                 # Create args for find_command
                 find_args = argparse.Namespace(
                     structure_file=str(file_path),
@@ -455,7 +472,8 @@ def batch_command(
                     min_size=2,
                     output=os.path.join(output_dir, file_path.stem),
                     no_vis=True,
-                    format='both'
+                    format='both',
+                    show_warnings=False
                 )
                 
                 # Run find command
@@ -466,7 +484,8 @@ def batch_command(
                     min_size=find_args.min_size,
                     output=find_args.output,
                     no_vis=find_args.no_vis,
-                    format=find_args.format
+                    format=find_args.format,
+                    show_warnings=False
                 )
                 
                 # Load results for summary
@@ -476,14 +495,24 @@ def batch_command(
                     
             except Exception as e:
                 console.print(f"[red]Error processing {file_path}: {e}[/red]")
+                had_errors = True
                 continue
         
-        # Generate summary
+        # Generate summary if we have any results
         if all_results:
             summary_file = os.path.join(output_dir, "batch_summary.txt")
             with open(summary_file, 'w') as f:
                 f.write(cluster_summary_stat(all_results, all_results))
             console.print(f"\nSaved batch summary to {summary_file}")
+        
+        # If we had errors and no successful results, exit with error code
+        if had_errors and not all_results:
+            console.print("[red]All files failed to process.[/red]")
+            raise typer.Exit(code=1)
+        
+        # If we had some errors but some successful results, show warning
+        if had_errors:
+            console.print("[yellow]Warning: Some files failed to process.[/yellow]")
             
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
@@ -648,13 +677,20 @@ def rank_command(
 def get_material_command(
     material_id: str = typer.Argument(..., help="Materials Project ID (e.g., mp-149)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (default: material_id.cif)"),
-    api_key: Optional[str] = typer.Option(None, "--api-key", "-k", help="Materials Project API key"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", "-k", help="Materials Project API key or set MAPI_KEY environment variable"),
     conventional: bool = typer.Option(False, "--conventional", help="Export conventional cell instead of primitive cell"),
     no_analysis: bool = typer.Option(False, "--no-analysis", help="Skip structure analysis information")
 ):
     """Get a material from Materials Project by ID and export as CIF."""
     try:
         console.print(f"\nRetrieving material {material_id} from Materials Project...")
+        
+        # Get API key from argument or environment variable
+        api_key = get_api_key(api_key)
+        
+        if not api_key:
+            console.print("[yellow]No API key provided. Set the MAPI_KEY environment variable or use --api-key.[/yellow]")
+            raise typer.Exit(code=1)
         
         with MPRester(api_key) as mpr:
             try:
@@ -713,13 +749,48 @@ def get_material_command(
 
 @app.command("version")
 def version():
-    """Show the version of cluster_finder."""
+    """Show the version and information about cluster_finder."""
     try:
         import pkg_resources
         version = pkg_resources.get_distribution("cluster_finder").version
-        console.print(f"[bold green]Cluster Finder version: {version}[/bold green]")
+        
+        # Create a rich table for displaying package information
+        table = Table(title=f"[bold green]Cluster Finder v{version}[/bold green]")
+        
+        # Define columns
+        table.add_column("Property", style="cyan", no_wrap=True)
+        table.add_column("Value", style="green")
+        
+        # Add package information
+        table.add_row("Version", version)
+        table.add_row("Author", "Md. Rajbanul Akhond")
+        table.add_row("Email", "mdakhond@iu.edu")
+        table.add_row("GitHub", "https://github.com/RajbanulAkhond/Cluster_Finder")
+        table.add_row("License", "MIT")
+        table.add_row("Description", "A Python package for finding, analyzing, and\nvisualizing atomic clusters in crystal structures")
+        
+        # Add citation information
+        table.add_row(
+            "Citation", 
+            "@software{akhond2024clusterfinder,\n"
+            "  author = {Akhond, Md. Rajbanul},\n"
+            "  title = {Cluster Finder: A Python package for finding\n"
+            "           atomic clusters in crystal structures},\n"
+            "  year = {2025},\n"
+            "  publisher = {GitHub},\n"
+            "  url = {https://github.com/RajbanulAkhond/Cluster_Finder}\n"
+            "}"
+        )
+        
+        console.print(table)
+        
+        # Print additional info
+        console.print("\n[yellow]For help with available commands:[/yellow]")
+        console.print("  cluster-finder --help")
+        
     except Exception:
         console.print("[yellow]Could not determine Cluster Finder version[/yellow]")
+        console.print("[green]Visit https://github.com/RajbanulAkhond/Cluster_Finder for more information[/green]")
 
 # Advanced analysis commands
 @analyze_app.command("batch")
@@ -744,6 +815,25 @@ def advanced_batch_analysis(
     """Run advanced batch analysis with additional options for parallel processing."""
     try:
         from cluster_finder.utils.logger import setup_logging
+        
+        # Get API key from argument or environment variable
+        api_key = get_api_key(api_key)
+        
+        if not api_key:
+            console.print("[bold red]Error: No Materials Project API key provided.[/bold red]")
+            console.print("[yellow]Please set your API key using one of the following methods:[/yellow]")
+            console.print("  1. Pass it directly with the --api-key flag")
+            console.print("  2. Set the MAPI_KEY environment variable: export MAPI_KEY=your_api_key")
+            console.print("[yellow]You can get your API key at: https://materialsproject.org/api[/yellow]")
+            raise typer.Exit(code=1)
+        
+        if len(api_key) != 32:
+            console.print("[bold yellow]Warning: Your API key appears to be in the wrong format.[/bold yellow]")
+            console.print("[yellow]The Materials Project API now requires a 32-character API key.[/yellow]")
+            console.print("[yellow]Legacy 16-character keys are no longer accepted.[/yellow]")
+            console.print("[yellow]Please get a new API key at: https://materialsproject.org/api[/yellow]")
+            
+            # Don't exit here, as MPRester will provide a more specific error
         
         # Configure logging based on verbose flag
         setup_logging(verbose=verbose)
@@ -890,4 +980,9 @@ def show_config(
 
 def main():
     """Main entry point for the command-line interface."""
-    app()
+    try:
+        app()
+    finally:
+        # Kill any resource_tracker processes after command execution
+        from cluster_finder.utils.helpers import kill_resource_tracker
+        kill_resource_tracker()
