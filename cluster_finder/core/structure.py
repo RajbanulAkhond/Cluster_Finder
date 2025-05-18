@@ -156,7 +156,8 @@ def generate_lattice_with_clusters(structure, clusters, tolerance=1e-5):
     try:
         sg_analyzer = SpacegroupAnalyzer(primitive_structure)
         conventional_structure = sg_analyzer.get_conventional_standard_structure()
-        space_group_symbol = sg_analyzer.get_space_group_symbol()
+        sg_analyzer_c = SpacegroupAnalyzer(conventional_structure)
+        space_group_symbol = sg_analyzer_c.get_space_group_symbol()
     except Exception as e:
         conventional_structure = primitive_structure
         space_group_symbol = "Symmetry Not Determined"

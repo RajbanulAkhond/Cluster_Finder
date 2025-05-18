@@ -34,19 +34,16 @@ def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> None
     # Set console quiet mode based on verbose flag
     console.quiet = not verbose
     
-    # Create a separate console for logging to prevent overlap with status displays
-    log_console = Console(stderr=True)  # Use stderr for logs
-    
     # Configure the console handler with the user-specified level
     console_handler = RichHandler(
-        console=log_console,  # Use separate console for logs
+        console=console,
         rich_tracebacks=True,
         show_time=verbose,
         show_path=verbose,
         markup=True,
         log_time_format="[%X]" if verbose else None,
         omit_repeated_times=True,
-        level=level
+        level=level  # This controls what actually gets shown to the user
     )
     root_logger.addHandler(console_handler)
     
@@ -66,10 +63,20 @@ def setup_logging(verbose: bool = False, log_file: Optional[str] = None) -> None
         # Suppress INFO logs from common verbose modules
         for module in ['urllib3', 'matplotlib', 'pymatgen', 'joblib', 'paramiko']:
             logging.getLogger(module).setLevel(logging.WARNING)
+    else:
+        os.environ.pop('TQDM_DISABLE', None)
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
-    """Get a logger instance."""
-    return logging.getLogger(name or 'cluster_finder')
+    """
+    Get a logger instance.
+    
+    Args:
+        name (str, optional): Logger name. If None, returns the root logger.
+    
+    Returns:
+        logging.Logger: Logger instance
+    """
+    return logging.getLogger(name)
 
 # Configure default logging and create the default logger instance
 setup_logging()
