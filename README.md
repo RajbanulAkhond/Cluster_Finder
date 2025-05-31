@@ -49,7 +49,7 @@ These versions are pinned in the `requirements.txt` file. To install these speci
 pip install -r requirements.txt
 ```
 
-Note: The package now requires Pydantic v2 or higher for improved data validation and serialization.
+Note: Tested for python version 3.11.11 and 3.11.12 and is recommended. The package now requires Pydantic v2 or higher for improved data validation and serialization.
 
 ## Quick Start
 
