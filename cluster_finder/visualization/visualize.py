@@ -17,11 +17,34 @@ import numpy as np
 import matplotlib.colors as mcolors
 from ase import Atom
 import warnings
+from ..utils.config_utils import load_config
 
 # Suppress specific NumPy warnings from ASE's matrix operations
 warnings.filterwarnings('ignore', category=RuntimeWarning, message='divide by zero encountered in matmul')
 warnings.filterwarnings('ignore', category=RuntimeWarning, message='overflow encountered in matmul')
 warnings.filterwarnings('ignore', category=RuntimeWarning, message='invalid value encountered in matmul')
+
+# Load configuration or use fallback defaults
+try:
+    config = load_config()
+    DEFAULT_DPI = config['visualization']['dpi']
+    DEFAULT_FIGURE_SIZE = config['visualization']['figure_size']
+    DEFAULT_SHOW_CLUSTERS = config['visualization']['show_clusters']
+    DEFAULT_USE_3D = config['visualization']['use_3d']
+    FONT_SIZE = config['visualization']['plot_settings']['font_size']
+    MARKER_SIZE = config['visualization']['plot_settings']['marker_size']
+    LINE_WIDTH = config['visualization']['plot_settings']['line_width']
+    CLUSTER_OPACITY = config['visualization']['plot_settings']['cluster_opacity']
+except (KeyError, FileNotFoundError):
+    # Fallback to hardcoded defaults if config loading fails
+    DEFAULT_DPI = 300
+    DEFAULT_FIGURE_SIZE = [12, 8]
+    DEFAULT_SHOW_CLUSTERS = True
+    DEFAULT_USE_3D = False
+    FONT_SIZE = 12
+    MARKER_SIZE = 100
+    LINE_WIDTH = 1.5
+    CLUSTER_OPACITY = 0.7
 
 
 def visualize_graph(graph, structure=None, tm_indices=None, material_id=None, formula=None, use_3d=False):
@@ -41,7 +64,7 @@ def visualize_graph(graph, structure=None, tm_indices=None, material_id=None, fo
     """
     if len(graph.edges) < 1:
         print("No edges to visualize")
-        fig = plt.figure(figsize=(10, 8))
+        fig = plt.figure(figsize=DEFAULT_FIGURE_SIZE)
         return fig
     
     # Create edge weights based on distances
@@ -65,7 +88,7 @@ def visualize_graph(graph, structure=None, tm_indices=None, material_id=None, fo
     
     if use_3d:
         # 3D visualization
-        fig = plt.figure(figsize=(12, 10))
+        fig = plt.figure(figsize=DEFAULT_FIGURE_SIZE)
         ax = fig.add_subplot(111, projection='3d')
         
         # Get real atom positions
@@ -75,19 +98,19 @@ def visualize_graph(graph, structure=None, tm_indices=None, material_id=None, fo
         
         # Draw nodes
         for node, (x, y, z) in pos.items():
-            ax.scatter(x, y, z, c=colors[node], s=150, edgecolor='black', alpha=0.9)
-            ax.text(x, y, z, labels[node], fontsize=12, fontweight='bold', ha='center', va='center')
+            ax.scatter(x, y, z, c=colors[node], s=MARKER_SIZE, edgecolor='black', alpha=0.9)
+            ax.text(x, y, z, labels[node], fontsize=FONT_SIZE, fontweight='bold', ha='center', va='center')
         
         # Draw edges and edge labels
         for u, v in graph.edges():
             x = np.array([pos[u][0], pos[v][0]])
             y = np.array([pos[u][1], pos[v][1]])
             z = np.array([pos[u][2], pos[v][2]])
-            ax.plot(x, y, z, c='gray', alpha=0.7, linewidth=2)
+            ax.plot(x, y, z, c='gray', alpha=0.7, linewidth=LINE_WIDTH)
             
             # Add distance label at the middle of the edge
             mid_x, mid_y, mid_z = (x[0] + x[1]) / 2, (y[0] + y[1]) / 2, (z[0] + z[1]) / 2
-            ax.text(mid_x, mid_y, mid_z, edge_labels[(u, v)], fontsize=8, 
+            ax.text(mid_x, mid_y, mid_z, edge_labels[(u, v)], fontsize=FONT_SIZE-4, 
                     bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.2'))
         
         # Set labels and title
@@ -102,30 +125,30 @@ def visualize_graph(graph, structure=None, tm_indices=None, material_id=None, fo
         ax.set_zlim([0, bounds[2]])
     else:
         # 2D visualization using Kamada-Kawai layout
-        fig = plt.figure(figsize=(12, 10))
+        fig = plt.figure(figsize=DEFAULT_FIGURE_SIZE)
         ax = fig.add_subplot(111)
         
         pos = nx.kamada_kawai_layout(graph, weight=None)
         
         # Draw nodes
         nx.draw_networkx_nodes(
-            graph, pos, node_size=800, node_color=colors, 
+            graph, pos, node_size=MARKER_SIZE*8, node_color=colors, 
             edgecolors="black", alpha=0.9, ax=ax
         )
         
         # Draw edges
-        nx.draw_networkx_edges(graph, pos, width=2.0, alpha=0.7, edge_color="gray", ax=ax)
+        nx.draw_networkx_edges(graph, pos, width=LINE_WIDTH, alpha=0.7, edge_color="gray", ax=ax)
         
         # Add labels to nodes
         for node, (x, y) in pos.items():
             plt.text(
-                x, y, labels[node], fontsize=10, fontweight='bold',
+                x, y, labels[node], fontsize=FONT_SIZE, fontweight='bold',
                 color="black", ha="center", va="center"
             )
         
         # Add edge labels
         nx.draw_networkx_edge_labels(
-            graph, pos, edge_labels=edge_labels, font_size=10, 
+            graph, pos, edge_labels=edge_labels, font_size=FONT_SIZE, 
             bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.2'), ax=ax
         )
         
@@ -135,7 +158,7 @@ def visualize_graph(graph, structure=None, tm_indices=None, material_id=None, fo
     title = "Transition Metal Connectivity Graph"
     if material_id and formula:
         title += f" for {formula} ({material_id})"
-    plt.title(title, fontsize=16)
+    plt.title(title, fontsize=FONT_SIZE+4)
     
     plt.tight_layout()
     return fig
@@ -212,7 +235,7 @@ def visualize_clusters_in_compound(structure, clusters, cluster_index=None, rota
         atoms = atoms_with_centroid
         
     # Create a Matplotlib figure and axis
-    fig, ax = plt.subplots(figsize=(12, 10))
+    fig, ax = plt.subplots(figsize=DEFAULT_FIGURE_SIZE)
     
     # Plot atoms with specified colors and perspective view
     plot_atoms(atoms, ax, radii=0.5, rotation=rotation, colors=atom_colors)
@@ -236,7 +259,7 @@ def visualize_clusters_in_compound(structure, clusters, cluster_index=None, rota
     title = f"Cluster {cluster_index + 1 if cluster_index is not None else 1}/{len(clusters)}"
     
     # Add a title with cluster info
-    ax.set_title(f"{title} - Size: {cluster['size']}, Avg Distance: {cluster['average_distance']:.2f} Å")
+    ax.set_title(f"{title} - Size: {cluster['size']}, Avg Distance: {cluster['average_distance']:.2f} Å", fontsize=FONT_SIZE+2)
     
     # Remove x and y axes
     ax.axis('off')
@@ -290,13 +313,13 @@ def visualize_cluster_lattice(conventional_structure, rot="80x,20y,0z"):
             unique_sites[coord_tuple] = f'C({len(unique_sites) + 1})'  # Assign cluster index
 
     # Create Matplotlib figure
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=DEFAULT_FIGURE_SIZE)
 
     # Plot using ASE's plot_atoms
     plot_atoms(atoms, ax, radii=0.5, rotation=rot, colors=atom_colors)
 
     # Remove axes and display plot
     ax.axis("off")
-    plt.title("Cluster Lattice in the Conventional Unit Cell")
+    plt.title("Cluster Lattice in the Conventional Unit Cell", fontsize=FONT_SIZE+2)
     plt.tight_layout()
     return fig

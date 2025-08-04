@@ -43,6 +43,9 @@ def cluster_compounds_dataframe(compounds_with_clusters, compound_system=None, v
         cluster_sizes = [cluster.get("size") for cluster in clusters] if clusters else []
         avg_distances = [cluster.get("average_distance") for cluster in clusters] if clusters else []
         cluster_sites = [[site.as_dict() for site in cluster.get("sites")] for cluster in clusters] if clusters else []
+        cluster_elements = [[site.specie.symbol for site in cluster["sites"]] for cluster in clusters] if clusters else []
+        is_extended = [cluster.get("is_extended", False) for cluster in clusters] if clusters else []
+        is_shared = [cluster.get("is_shared", False) for cluster in clusters] if clusters else []
 
         # Create basic record with default columns
         record = {
@@ -54,6 +57,9 @@ def cluster_compounds_dataframe(compounds_with_clusters, compound_system=None, v
             "cluster_sizes": cluster_sizes,
             "average_distance": avg_distances,
             "cluster_sites": cluster_sites,
+            "cluster_elements": cluster_elements,
+            "is_extended": is_extended,
+            "is_shared": is_shared,
             "structure": structure,  # Already a dictionary
         }
         
@@ -131,6 +137,20 @@ def postprocessed_clusters_dataframe(data_source):
             lambda x: ast.literal_eval(x) if isinstance(x, str) else x
         )
     
+    # Process additional cluster properties
+    if "cluster_elements" in df.columns:
+        df["cluster_elements_processed"] = df["cluster_elements"].apply(
+            lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+        )
+    if "is_extended" in df.columns:
+        df["is_extended_processed"] = df["is_extended"].apply(
+            lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+        )
+    if "is_shared" in df.columns:
+        df["is_shared_processed"] = df["is_shared"].apply(
+            lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+        )
+    
     # Unfortunately, the subsequent operations with generating lattices and classifying
     # dimensionality need to be done per-row since they involve complex PyMatGen operations.
     # Here we'll still use a row-wise operation but optimize the inner work.
@@ -149,6 +169,11 @@ def postprocessed_clusters_dataframe(data_source):
         average_distance = row.get('average_distance')
         structure_data = row.get('structure_processed', row.get('structure'))
         cluster_sites_data = row.get('cluster_sites_processed', row.get('cluster_sites'))
+
+        # Get the additional cluster properties
+        cluster_elements_data = row.get('cluster_elements_processed', row.get('cluster_elements'))
+        is_extended_data = row.get('is_extended_processed', row.get('is_extended'))
+        is_shared_data = row.get('is_shared_processed', row.get('is_shared'))
         
         # Convert structure to Structure object if it's a dict
         if isinstance(structure_data, dict):
@@ -165,8 +190,7 @@ def postprocessed_clusters_dataframe(data_source):
             clusters.append({
                 'size': size,
                 'average_distance': avg_dist,
-                'sites': sites_objects,
-                'label': f'X{i}'  # Add a unique label for each cluster
+                'sites': sites_objects
             })
         
         # These operations can't be easily vectorized due to PyMatGen dependencies
@@ -188,6 +212,9 @@ def postprocessed_clusters_dataframe(data_source):
             "norm_svals": norm_svals,
             "conventional_cluster_lattice": conventional_structure.to(fmt="json"),
             "cluster_sites": cluster_sites_data,
+            "cluster_elements": cluster_elements_data,
+            "is_extended": is_extended_data,
+            "is_shared": is_shared_data,
         }
         records.append(record)
     

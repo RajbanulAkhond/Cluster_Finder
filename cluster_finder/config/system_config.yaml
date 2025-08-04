@@ -1,10 +1,10 @@
 # Cluster Finder Systems Configuration
-# This file defines the element combinations to analyze
+# This file defines the element combinations to analyze and all constants used in the codebase
 
 # List of transition metals to include in the analysis
 transition_metals:
   - "Nb"
-  - "V"
+  - "V" 
   - "Ir"
 
 # List of anions to include in the analysis  
@@ -21,16 +21,8 @@ element_filters:
 # Property filters
 property_filters:
   min_magnetization: 0.01
-  max_magnetization: 5.0
+  max_magnetization: 10.0
 
-# Analysis parameters
-analysis_params:
-  top_n_compounds: 10  # Number of top compounds to visualize
-  
-# Ranking weights for different properties
-ranking_weights:
-  energy_above_hull: -2.0
-  symmetry: 0.0
   
 # Properties to retrieve from Materials Project
 mp_properties:
@@ -38,3 +30,75 @@ mp_properties:
   - "formation_energy_per_atom"
   - "band_gap"
   - "total_magnetization"
+
+# Clustering algorithm parameters
+clustering:
+  # Default constants for cluster detection
+  default_max_radius: 3.0      # Maximum atom-to-atom distance for cluster search (Å)
+  default_cluster_size: 2      # Minimum number of atoms in a cluster
+  max_cluster_size: 8          # Maximum cluster size for ranking (larger clusters are filtered out)
+  
+  # Parameters for splitting clusters
+  split_cluster:
+    initial_cutoff: 3.0        # Initial cutoff distance for splitting clusters (Å)
+    cutoff_step: 0.01           # Step size for decreasing cutoff distance (Å)
+    min_cutoff: 2.5            # Minimum cutoff distance for splitting clusters (Å)
+    tolerance: 0.2            # Tolerance for comparing average distances
+    centroid_threshold: 3.0    # Minimum distance between centroids of split clusters (Å)
+    max_recursion: 2           # Maximum number of recursive splits
+
+  # Parameters for cluster analysis
+  analyze_clusters:
+    n_jobs: 4                  # Number of parallel jobs for cluster analysis
+    str_extension: 2           # Extension factor for creating supercell to check for extended structures
+
+  # Parameters for identifying unique clusters
+  identify_unique_clusters:
+    use_symmetry: true         # Whether to use symmetry for identifying unique clusters
+    tolerance: 0.001         # Tolerance for comparing cluster geometries
+
+# Visualization parameters
+visualization:
+  top_n_compounds: 10  # Number of top compounds to visualize
+  dpi: 300                     # DPI for saving figures
+  show_clusters: true          # Whether to show clusters in structure visualization
+  use_3d: false                # Whether to use 3D visualization (default is 2D)
+  figure_size: [12, 8]         # Default figure size
+  plot_settings:
+    font_size: 12              # Default font size
+    marker_size: 100           # Default marker size for atoms
+    line_width: 1.5            # Default line width for bonds
+    cluster_opacity: 0.7       # Opacity for cluster visualization
+
+# Default ranking weights for cluster properties
+default_ranking_weights:
+  min_avg_distance: -1.0       # Lower distance is better
+  max_point_group_order: 0.05  # Higher symmetry is better (1.0/48.0)
+  space_group_order: 0.004     # Higher symmetry is better (1.0/230.0)
+  energy_above_hull: -5.0      # Lower energy is better
+  formation_energy_per_atom: -1.0  # Lower formation energy is better
+  band_gap: 1.0                # Higher band gap is better
+
+# Batch processing parameters
+batch_processing:
+  max_workers: 4               # Maximum number of parallel system analyses
+  n_jobs_per_analysis: 1       # Number of parallel jobs per analysis
+  save_pdf: true               # Whether to save PDF reports
+  save_csv: true               # Whether to save CSV data
+  use_mpi: false               # Whether to use MPI for parallel processing
+  mpi_cores: null              # Number of MPI cores to use (null = auto)
+
+# Logging configuration
+logging:
+  verbose: false               # Whether to show detailed logging information
+  log_to_file: false           # Whether to log to file
+  log_file: null               # Path to log file (null = auto based on output directory)
+
+# File I/O settings
+file_io:
+  default_format: "json"       # Default output format (json, csv, or both)
+  export_formats:              # Supported export formats
+    - "json"
+    - "csv"
+    - "cif"
+  compression: false           # Whether to compress output files

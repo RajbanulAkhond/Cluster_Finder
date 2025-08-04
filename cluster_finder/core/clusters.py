@@ -11,13 +11,42 @@ from pymatgen.core.lattice import Lattice
 from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 from .graph import structure_to_graph, create_connectivity_matrix
 from .utils import calculate_centroid
+from ..utils.config_utils import load_config
 
-# Default constants
-DEFAULT_MAX_RADIUS = 3.5  # Maximum atom-to-atom distance for cluster search
-DEFAULT_CLUSTER_SIZE = 2  # Minimum number of atoms in a cluster
+# Load configuration
+try:
+    config = load_config()
+    DEFAULT_MAX_RADIUS = config['clustering']['default_max_radius']
+    DEFAULT_CLUSTER_SIZE = config['clustering']['default_cluster_size']
+    MAX_CLUSTER_SIZE = config['clustering']['max_cluster_size']
+    SPLIT_CLUSTER_INITIAL_CUTOFF = config['clustering']['split_cluster']['initial_cutoff']
+    SPLIT_CLUSTER_CUTOFF_STEP = config['clustering']['split_cluster']['cutoff_step']
+    SPLIT_CLUSTER_MIN_CUTOFF = config['clustering']['split_cluster']['min_cutoff']
+    SPLIT_CLUSTER_TOLERANCE = config['clustering']['split_cluster']['tolerance']
+    SPLIT_CLUSTER_CENTROID_THRESHOLD = config['clustering']['split_cluster']['centroid_threshold']
+    SPLIT_CLUSTER_MAX_RECURSION = config['clustering']['split_cluster'].get('max_recursion', 3)
+    ANALYSIS_N_JOBS = config['clustering']['analyze_clusters']['n_jobs']
+    STR_EXTENSION = config['clustering']['analyze_clusters'].get('str_extension', 2)
+    IDENTIFY_UNIQUE_CLUSTERS_USE_SYMMETRY = config['clustering']['identify_unique_clusters']['use_symmetry']
+    IDENTIFY_UNIQUE_CLUSTERS_TOLERANCE = config['clustering']['identify_unique_clusters']['tolerance']
+except (KeyError, FileNotFoundError):
+    # Fallback to default values if config loading fails
+    DEFAULT_MAX_RADIUS = 3.0  # Maximum atom-to-atom distance for cluster search
+    DEFAULT_CLUSTER_SIZE = 2  # Minimum number of atoms in a cluster
+    MAX_CLUSTER_SIZE = 8  # Maximum cluster size for ranking
+    SPLIT_CLUSTER_INITIAL_CUTOFF = 3.0
+    SPLIT_CLUSTER_CUTOFF_STEP = 0.01
+    SPLIT_CLUSTER_MIN_CUTOFF = 2.5
+    SPLIT_CLUSTER_TOLERANCE = 0.2
+    SPLIT_CLUSTER_CENTROID_THRESHOLD = 3.0
+    SPLIT_CLUSTER_MAX_RECURSION = 3  # Maximum number of recursive splits
+    ANALYSIS_N_JOBS = 4
+    STR_EXTENSION = 2  # Default value for supercell extension
+    IDENTIFY_UNIQUE_CLUSTERS_USE_SYMMETRY = True
+    IDENTIFY_UNIQUE_CLUSTERS_TOLERANCE = 0.001
 
 
-def find_clusters(structure, graph, tm_indices, min_cluster_size=DEFAULT_CLUSTER_SIZE):
+def find_clusters(structure, graph, tm_indices, min_cluster_size=None):
     """
     Find clusters in a structure using graph components.
     
@@ -30,6 +59,9 @@ def find_clusters(structure, graph, tm_indices, min_cluster_size=DEFAULT_CLUSTER
     Returns:
         list: List of clusters as lists of pymatgen Site objects
     """
+    if min_cluster_size is None:
+        min_cluster_size = DEFAULT_CLUSTER_SIZE
+    
     clusters = []
     for component in nx.connected_components(graph):
         cluster_indices = [tm_indices[i] for i in component]
@@ -39,7 +71,7 @@ def find_clusters(structure, graph, tm_indices, min_cluster_size=DEFAULT_CLUSTER
     return clusters
 
 
-def calculate_average_distance(sites, max_radius=3.5):
+def calculate_average_distance(sites, max_radius=None):
     """
     Calculate average distance between sites in a cluster.
     
@@ -50,6 +82,9 @@ def calculate_average_distance(sites, max_radius=3.5):
     Returns:
         float: Average distance between sites
     """
+    if max_radius is None:
+        max_radius = DEFAULT_MAX_RADIUS
+    
     if len(sites) < 2:
         return 0.0
     
@@ -73,7 +108,7 @@ def calculate_average_distance(sites, max_radius=3.5):
     return float(np.mean(valid_distances)) if len(valid_distances) > 0 else 0.0
 
 
-def build_graph(sites, cutoff=3.5, distances_cache=None):
+def build_graph(sites, cutoff=None, distances_cache=None):
     """
     Build a graph from a list of sites.
     
@@ -85,6 +120,9 @@ def build_graph(sites, cutoff=3.5, distances_cache=None):
     Returns:
         networkx.Graph: Graph representation of connectivity
     """
+    if cutoff is None:
+        cutoff = DEFAULT_MAX_RADIUS
+    
     n_sites = len(sites)
     G = nx.Graph()
     G.add_nodes_from(range(n_sites))
@@ -115,9 +153,9 @@ def build_graph(sites, cutoff=3.5, distances_cache=None):
     return G
 
 
-def split_cluster(cluster, parent_avg_distance, lattice, cluster_size=DEFAULT_CLUSTER_SIZE+1, 
-                 initial_cutoff=3.5, cutoff_step=0.1, min_cutoff=2.5, 
-                 tolerance=0.01, centroid_threshold=DEFAULT_MAX_RADIUS):
+def split_cluster(cluster, parent_avg_distance, lattice, cluster_size=None, 
+                 initial_cutoff=None, cutoff_step=None, min_cutoff=None, 
+                 tolerance=None, centroid_threshold=None, max_recursion=None, _recursion_depth=0):
     """
     Split large clusters into smaller sub-clusters with centroid distance checks.
 
@@ -131,12 +169,34 @@ def split_cluster(cluster, parent_avg_distance, lattice, cluster_size=DEFAULT_CL
         min_cutoff (float): Minimum cutoff distance
         tolerance (float): Tolerance for average distance difference
         centroid_threshold (float): Minimum distance between centroids
+        max_recursion (int): Maximum number of recursive splits
+        _recursion_depth (int): Internal parameter to track recursion depth
 
     Returns:
         list: List of sub-clusters or [cluster] if no split is performed
     """
+    # Use config values if parameters are not provided
+    if cluster_size is None:
+        cluster_size = MAX_CLUSTER_SIZE
+    if initial_cutoff is None:
+        initial_cutoff = SPLIT_CLUSTER_INITIAL_CUTOFF
+    if cutoff_step is None:
+        cutoff_step = SPLIT_CLUSTER_CUTOFF_STEP
+    if min_cutoff is None:
+        min_cutoff = SPLIT_CLUSTER_MIN_CUTOFF
+    if tolerance is None:
+        tolerance = SPLIT_CLUSTER_TOLERANCE
+    if centroid_threshold is None:
+        centroid_threshold = SPLIT_CLUSTER_CENTROID_THRESHOLD
+    if max_recursion is None:
+        max_recursion = SPLIT_CLUSTER_MAX_RECURSION
+    
+    # Check recursion depth limit
+    if _recursion_depth >= max_recursion:
+        return [cluster]
+    
     # Skip small clusters immediately
-    if len(cluster) <= cluster_size:
+    if len(cluster) < cluster_size:
         return [cluster]
         
     # Pre-compute all distances at once using NumPy arrays
@@ -216,13 +276,14 @@ def split_cluster(cluster, parent_avg_distance, lattice, cluster_size=DEFAULT_CL
         # Process sub-clusters
         sub_clusters = []
         for sub_cluster in candidate_sub_clusters:
-            if len(sub_cluster) > cluster_size:
+            if len(sub_cluster) >= cluster_size:
                 # Recursively split large sub-clusters
                 sub_avg_distance = calculate_average_distance(sub_cluster, initial_cutoff)
                 sub_clusters.extend(
                     split_cluster(sub_cluster, sub_avg_distance, lattice, 
-                                 cluster_size, initial_cutoff, cutoff_step,
-                                 min_cutoff, tolerance, centroid_threshold))
+                                 cluster_size, current_cutoff, cutoff_step,
+                                 min_cutoff, tolerance, centroid_threshold,
+                                 max_recursion, _recursion_depth + 1))
             else:
                 sub_clusters.append(sub_cluster)
         
@@ -234,7 +295,7 @@ def split_cluster(cluster, parent_avg_distance, lattice, cluster_size=DEFAULT_CL
     return [cluster]
 
 
-def analyze_clusters(clusters, lattice, cluster_size=DEFAULT_CLUSTER_SIZE+1, max_radius=DEFAULT_MAX_RADIUS, n_jobs=4):
+def analyze_clusters(clusters, lattice, cluster_size=None, max_radius=None, n_jobs=None, str_extension=None):
     """
     Analyze and process clusters found in a structure.
     
@@ -244,16 +305,60 @@ def analyze_clusters(clusters, lattice, cluster_size=DEFAULT_CLUSTER_SIZE+1, max
         cluster_size (int): Desired maximum cluster size
         max_radius (float): Maximum radius to consider
         n_jobs (int): Number of parallel jobs for processing clusters
+        str_extension (int): Extension factor for creating supercell to check for extended structures
         
     Returns:
         list: Processed clusters with metadata
     """
     import concurrent.futures
     
+    # Use config values if parameters are not provided
+    if cluster_size is None:
+        cluster_size = MAX_CLUSTER_SIZE
+    if max_radius is None:
+        max_radius = DEFAULT_MAX_RADIUS
+    if n_jobs is None:
+        n_jobs = ANALYSIS_N_JOBS
+    if str_extension is None:
+        str_extension = STR_EXTENSION
+    
     # Process a single cluster
     def process_cluster(cluster):
         avg_distance = calculate_average_distance(cluster, max_radius)
-        sub_clusters = split_cluster(cluster, avg_distance, lattice, cluster_size)
+        
+        # Create a structure from the cluster to enable supercell creation
+        species = [site.specie for site in cluster]
+        coords = [site.coords for site in cluster]
+        temp_structure = Structure(lattice, species, coords, coords_are_cartesian=True)
+        
+        # Create a supercell
+        supercell = temp_structure.make_supercell([str_extension, str_extension, str_extension])
+        
+        # Find clusters in the supercell
+        connectivity_matrix, sc_indices = create_connectivity_matrix(supercell, [s.symbol for s in species], cutoff=max_radius)
+        sc_graph = structure_to_graph(connectivity_matrix)
+        sc_clusters = find_clusters(supercell, sc_graph, sc_indices)
+        
+        # If supercell clusters found, analyze the first (largest) one
+        is_extended = False
+        is_shared = False
+        
+        if sc_clusters:
+            largest_sc_cluster = sc_clusters[0]
+            sc_avg_distance = calculate_average_distance(largest_sc_cluster, max_radius)
+            
+            # Check if cluster is extended: supercell has larger cluster with same avg distance
+            if len(largest_sc_cluster) > len(cluster) and abs(sc_avg_distance - avg_distance) <= 0.0001:
+                is_extended = True
+            # Check if cluster is shared: supercell has different avg distance
+            elif abs(sc_avg_distance - avg_distance) > 0.0001:
+                is_shared = True
+        
+        # Only split clusters when they are neither extended nor shared
+        if not is_extended and not is_shared:
+            sub_clusters = split_cluster(cluster, avg_distance, lattice, cluster_size)
+        else:
+            sub_clusters = [cluster]
         
         result = []
         for sub_cluster in sub_clusters:
@@ -263,7 +368,9 @@ def analyze_clusters(clusters, lattice, cluster_size=DEFAULT_CLUSTER_SIZE+1, max
                 "sites": sub_cluster,
                 "size": len(sub_cluster),
                 "average_distance": sub_avg_distance,
-                "centroid": centroid
+                "centroid": centroid,
+                "is_extended": is_extended,
+                "is_shared": is_shared
             })
         return result
     
@@ -293,10 +400,10 @@ def analyze_clusters(clusters, lattice, cluster_size=DEFAULT_CLUSTER_SIZE+1, max
     return processed_clusters
 
 
-def identify_unique_clusters(clusters, use_symmetry=True, tolerance=1e-5):
+def identify_unique_clusters(clusters, use_symmetry=None, tolerance=None):
     """
-    Identify unique clusters based on atoms, connectivity, and optionally point group symmetry.
-    Assigns consistent labels to clusters with the same characteristics.
+    Identify unique clusters based on atoms, connectivity, point group symmetry,
+    and orientation. Assigns consistent labels to clusters with the same characteristics.
     
     Parameters:
         clusters (list): List of cluster dictionaries
@@ -308,51 +415,84 @@ def identify_unique_clusters(clusters, use_symmetry=True, tolerance=1e-5):
     """
     from collections import defaultdict
     
+    # Use config values if parameters are not provided
+    if use_symmetry is None:
+        use_symmetry = IDENTIFY_UNIQUE_CLUSTERS_USE_SYMMETRY
+    if tolerance is None:
+        tolerance = IDENTIFY_UNIQUE_CLUSTERS_TOLERANCE
+    
     # First, prepare all clusters with the necessary properties
     for cluster in clusters:
-        # Calculate relative coordinates from centroid - this makes it translation-invariant
-        cart_coords = np.array([site.coords for site in cluster["sites"]])
-        centroid = np.mean(cart_coords, axis=0)
-        rel_coords = cart_coords - centroid
-        
-        # Calculate distance matrix - this is invariant to translation
-        n_sites = len(cluster["sites"])
-        dist_matrix = np.zeros((n_sites, n_sites))
-        for i in range(n_sites):
-            for j in range(i+1, n_sites):
-                dist = np.linalg.norm(cart_coords[i] - cart_coords[j])
-                dist_matrix[i,j] = dist_matrix[j,i] = dist
-                
-        # Store these for comparison
-        cluster["relative_coords"] = rel_coords
-        cluster["distance_matrix"] = dist_matrix
-        
         # Calculate point group if not already present
         if use_symmetry and "point_group" not in cluster:
             species = [site.specie for site in cluster["sites"]]
+            cart_coords = np.array([site.coords for site in cluster["sites"]])
             molecule = Molecule(species, cart_coords)
             pga = PointGroupAnalyzer(molecule)
             cluster["point_group"] = pga.get_pointgroup().sch_symbol
+            
+        # Ensure average_distance is calculated
+        if "average_distance" not in cluster:
+            cluster["average_distance"] = calculate_average_distance(cluster["sites"])
+            
+        # Calculate the moment of inertia tensor for orientation comparison
+        cart_coords = np.array([site.coords for site in cluster["sites"]])
+        # Center the coordinates to calculate orientation properly
+        center = np.mean(cart_coords, axis=0)
+        centered_coords = cart_coords - center
+        
+        # Calculate moment of inertia tensor
+        inertia_tensor = np.zeros((3, 3))
+        for coord in centered_coords:
+            # Diagonal elements
+            inertia_tensor[0, 0] += coord[1]**2 + coord[2]**2
+            inertia_tensor[1, 1] += coord[0]**2 + coord[2]**2
+            inertia_tensor[2, 2] += coord[0]**2 + coord[1]**2
+            # Off-diagonal elements
+            inertia_tensor[0, 1] -= coord[0] * coord[1]
+            inertia_tensor[0, 2] -= coord[0] * coord[2]
+            inertia_tensor[1, 2] -= coord[1] * coord[2]
+        
+        # Make the tensor symmetric
+        inertia_tensor[1, 0] = inertia_tensor[0, 1]
+        inertia_tensor[2, 0] = inertia_tensor[0, 2]
+        inertia_tensor[2, 1] = inertia_tensor[1, 2]
+        
+        # Calculate eigenvalues (principal moments of inertia)
+        eigenvalues = np.linalg.eigvalsh(inertia_tensor)
+        # Sort eigenvalues to ensure consistent comparison
+        eigenvalues = np.sort(eigenvalues)
+        
+        # Store eigenvalues for orientation comparison
+        cluster["orientation_eigvals"] = eigenvalues
     
-    # Group clusters by size and point group first (quick filters)
+    # Group clusters by size, elements, and point group first (quick filters)
     size_groups = defaultdict(list)
-    for i, cluster in enumerate(clusters):
-        key = (cluster["size"], cluster["point_group"] if use_symmetry and "point_group" in cluster else "")
+    for cluster in clusters:
+        # Create a key based on size, element composition, and point group
+        elements = sorted([site.specie.symbol for site in cluster["sites"]])
+        element_counts = {}
+        for element in elements:
+            element_counts[element] = element_counts.get(element, 0) + 1
+        element_key = "-".join([f"{el}_{count}" for el, count in sorted(element_counts.items())])
+        
+        key = (
+            cluster["size"], 
+            element_key,
+            cluster["point_group"] if use_symmetry and "point_group" in cluster else ""
+        )
         size_groups[key].append(cluster)
     
-    # Within each size group, compare distance matrices to find truly unique clusters
-    processed_clusters = []
+    # Within each group, compare average distances and orientations to find truly unique clusters
     label_count = 0
     
-    for size_group in size_groups.values():
+    for group_key, size_group in size_groups.items():
         for i, cluster in enumerate(size_group):
             if "label" in cluster:
                 continue  # Already processed
                 
-            # This will be a new unique cluster
+            # Assign a label to current cluster
             cluster["label"] = f"X{label_count}"
-            label_count += 1
-            processed_clusters.append(cluster)
             
             # Compare with all other clusters in this group that haven't been processed
             for j in range(i+1, len(size_group)):
@@ -360,12 +500,31 @@ def identify_unique_clusters(clusters, use_symmetry=True, tolerance=1e-5):
                 if "label" in other:
                     continue  # Already processed
                 
-                # Compare distance matrices with increased tolerance to handle floating point precision
-                if np.allclose(cluster["distance_matrix"], other["distance_matrix"], 
-                               rtol=tolerance, atol=tolerance*10):
-                    # These clusters are geometrically equivalent
-                    other["label"] = cluster["label"]
-                    processed_clusters.append(other)
+                # Compare average distances with tolerance
+                if abs(cluster["average_distance"] - other["average_distance"]) <= tolerance:
+                    # Check for orientation differences
+                    orientation_same = True
+                    for k in range(3):  # Compare all 3 eigenvalues
+                        # If eigenvalues differ significantly, orientation is different
+                        if abs(cluster["orientation_eigvals"][k] - other["orientation_eigvals"][k]) > tolerance:
+                            orientation_same = False
+                            break
+                    
+                    # Only consider clusters the same if orientation is also the same
+                    if orientation_same:
+                        # These clusters are geometrically equivalent with the same orientation
+                        other["label"] = cluster["label"]  # Use same label as current cluster
+                    else:
+                        # Different orientation, assign a new label
+                        label_count += 1
+                        other["label"] = f"X{label_count}"
+                else:
+                    # Different average distance, assign a new label
+                    label_count += 1
+                    other["label"] = f"X{label_count}"
+            
+            # Increment label counter for next unique cluster
+            label_count += 1
     
     # Return all clusters
     return clusters
@@ -397,7 +556,7 @@ def get_compounds_with_clusters(entries, transition_metals, primary_transition_m
         formula = entry.formula_pretty
         structure = entry.structure
         total_magnetization = entry.total_magnetization
-        connectivity_matrix, tm_indices = create_connectivity_matrix(structure, transition_metals)
+        connectivity_matrix, tm_indices = create_connectivity_matrix(structure, transition_metals, cutoff=DEFAULT_MAX_RADIUS)
         graph = structure_to_graph(connectivity_matrix)
         # Find all clusters
         clusters = find_clusters(structure, graph, tm_indices)

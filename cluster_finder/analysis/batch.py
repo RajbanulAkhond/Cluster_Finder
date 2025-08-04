@@ -72,8 +72,8 @@ def run_analysis_wrapper(primary_tm, anion, api_key, output_dir, config, n_jobs,
             verbose=_worker_verbose  # Pass through verbosity setting
         )
         
-        if _worker_verbose:
-            process_logger.info(f"Completed analysis for {primary_tm}-{anion} system with {result.get('compounds_with_clusters_count', 0)} compounds with clusters")
+        #if _worker_verbose:
+            #process_logger.info(f"Completed analysis for {primary_tm}-{anion} system with {result.get('compounds_with_clusters_count', 0)} compounds with clusters")
         return result
         
     except Exception as e:

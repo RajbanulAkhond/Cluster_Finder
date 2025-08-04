@@ -10,12 +10,13 @@ import json
 import argparse
 import numpy as np
 import pandas as pd
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Union
 from pathlib import Path
 from pymatgen.core.structure import Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from mp_api.client import MPRester
 import matplotlib.pyplot as plt
+import yaml
 
 # Add check for LZMA support early in the CLI
 try:
@@ -89,8 +90,8 @@ def validate_input_file(file_path: str, expected_format: Optional[str] = None) -
 
 # Create Typer app
 app = typer.Typer(help="Cluster Finder CLI")
-analyze_app = typer.Typer(help="Advanced analysis commands")
-app.add_typer(analyze_app, name="analyze")
+#analyze_app = typer.Typer(help="Advanced analysis commands")
+#app.add_typer(analyze_app, name="analyze")
 
 console = Console()
 
@@ -98,7 +99,7 @@ console = Console()
 def find_command(
     structure_file: str = typer.Argument(..., help="Structure file (CIF, POSCAR, etc.)"),
     elements: Optional[List[str]] = typer.Option(None, "--elements", "-e", help="Elements to consider for clusters (default: all transition metals)"),
-    radius: float = typer.Option(3.5, "--radius", "-r", help="Maximum atom-to-atom distance for cluster search (default: 3.5 Å)"),
+    radius: float = typer.Option(3.0, "--radius", "-r", help="Maximum atom-to-atom distance for cluster search (default: 3.5 Å)"),
     min_size: int = typer.Option(2, "--min-size", "-s", help="Minimum cluster size (default: 2)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file prefix (default: based on input filename)"),
     no_vis: bool = typer.Option(False, "--no-vis", help="Disable visualization"),
@@ -149,7 +150,9 @@ def find_command(
                 "average_distance": float(cluster["average_distance"]),
                 "centroid": [float(x) for x in cluster["centroid"]],
                 "elements": [site.specie.symbol for site in cluster["sites"]],
-                "sites": [site.as_dict() for site in cluster["sites"]]
+                "sites": [site.as_dict() for site in cluster["sites"]],
+                "is_extended": cluster.get("is_extended", False),
+                "is_shared": cluster.get("is_shared", False)
             }
             json_clusters.append(json_cluster)
         
@@ -290,6 +293,19 @@ def analyze_command(
             console.print(f"  {cluster_label}: {point_group}")
         console.print(f"Number of Clusters: {len(data['clusters'])}")
         
+        # Print detailed cluster information
+        console.print("\n[green]Cluster Details:[/green]")
+        for i, cluster in enumerate(data['clusters']):
+            # Create elements string (e.g. Nb-Nb-V)
+            elements_str = "-".join(cluster['elements']) if 'elements' in cluster else "Unknown"
+            
+            console.print(f"  Cluster {i+1}:")
+            console.print(f"    Size: {cluster['size']}")
+            console.print(f"    Average Distance: {cluster['average_distance']:.4f} Å")
+            console.print(f"    Elements: {elements_str}")
+            console.print(f"    Extended Structure: {cluster.get('is_extended', False)}")
+            console.print(f"    Shared Cluster: {cluster.get('is_shared', False)}")
+            
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
         raise typer.Exit(code=1)
@@ -793,7 +809,7 @@ def version():
         console.print("[green]Visit https://github.com/RajbanulAkhond/Cluster_Finder for more information[/green]")
 
 # Advanced analysis commands
-@analyze_app.command("batch")
+@app.command("explore")
 def advanced_batch_analysis(
     api_key: Optional[str] = typer.Option(None, "--api-key", "-k", help="Materials Project API key"),
     output_dir: Path = typer.Option("results", "--output-dir", "-o", help="Directory to save outputs"),
@@ -957,23 +973,195 @@ def advanced_batch_analysis(
         console.print(f"[bold red]Error: {str(e)}[/bold red]")
         raise typer.Exit(code=1)
 
-@analyze_app.command("config")
-def show_config(
-    config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Path to configuration file"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file to save the configuration")
+@app.command("config-edit")
+def config_edit(
+    parameter_path: str = typer.Argument(..., help="Path to parameter in dot notation (e.g., 'clustering.default_max_radius')"),
+    value: str = typer.Argument(..., help="New value for the parameter"),
+    config_file: Optional[str] = typer.Option(None, "--config", "-c", help="Path to config file (default: package system_config.yaml)"),
+    backup: bool = typer.Option(True, "--no-backup", help="Do not create a backup of the original config file", show_default=False),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Save modified config to a new file instead of overwriting"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show changes without writing to file"),
 ):
-    """Display or export the current configuration."""
+    """Modify parameters in system_config.yaml file."""
     try:
-        config = load_config(config_path) if config_path else {}
+        # Find the config file
+        if config_file is None:
+            # Find the default config file in the package
+            import inspect
+            import cluster_finder
+            package_dir = os.path.dirname(inspect.getfile(cluster_finder))
+            config_file = os.path.join(package_dir, "config", "system_config.yaml")
+            
+        if not os.path.exists(config_file):
+            console.print(f"[red]Error: Config file not found at {config_file}[/red]")
+            raise typer.Exit(code=1)
+            
+        # Create backup if requested
+        if backup and not dry_run and not output:
+            backup_file = f"{config_file}.bak"
+            import shutil
+            shutil.copy2(config_file, backup_file)
+            console.print(f"[green]Created backup at {backup_file}[/green]")
+            
+        # Load the config
+        with open(config_file, 'r') as f:
+            config_data = yaml.safe_load(f)
+            
+        # Parse the parameter path
+        path_parts = parameter_path.split('.')
         
-        if output:
-            with open(output, 'w') as f:
-                json.dump(config, f, indent=2)
-            console.print(f"[green]Configuration saved to {output}[/green]")
-        else:
-            console.print("[bold]Current Configuration:[/bold]")
-            console.print(json.dumps(config, indent=2))
+        # Function to update nested dict
+        def update_nested_dict(d, keys, value):
+            if not keys:
+                return value
+            
+            key = keys[0]
+            if key not in d:
+                d[key] = {}
+            
+            if len(keys) == 1:
+                # Try to convert value to appropriate type
+                try:
+                    # Handle boolean values
+                    if value.lower() in ('true', 'yes', '1'):
+                        d[key] = True
+                    elif value.lower() in ('false', 'no', '0'):
+                        d[key] = False
+                    # Handle numeric values
+                    elif value.replace('.', '', 1).isdigit():
+                        if '.' in value:
+                            d[key] = float(value)
+                        else:
+                            d[key] = int(value)
+                    # Handle lists
+                    elif value.startswith('[') and value.endswith(']'):
+                        try:
+                            d[key] = json.loads(value)
+                        except json.JSONDecodeError:
+                            # Fall back to string if can't parse JSON
+                            d[key] = value
+                    else:
+                        d[key] = value
+                except Exception:
+                    # If conversion fails, keep as string
+                    d[key] = value
+            else:
+                if not isinstance(d[key], dict):
+                    d[key] = {}
+                d[key] = update_nested_dict(d[key], keys[1:], value)
+            
+            return d
+            
+        # Get the current value for comparison
+        def get_nested_value(d, keys):
+            if not keys:
+                return d
+            
+            key = keys[0]
+            if key not in d:
+                return None
+                
+            if len(keys) == 1:
+                return d[key]
+            else:
+                if not isinstance(d[key], dict):
+                    return None
+                return get_nested_value(d[key], keys[1:])
+        
+        current_value = get_nested_value(config_data, path_parts)
+        
+        # Update the config
+        config_data = update_nested_dict(config_data, path_parts, value)
+        
+        # Get the new value
+        new_value = get_nested_value(config_data, path_parts)
+        
+        # Show the change
+        console.print(f"[bold]Parameter:[/bold] {parameter_path}")
+        console.print(f"[bold]Current value:[/bold] {current_value}")
+        console.print(f"[bold]New value:[/bold] {new_value}")
+        
+        if dry_run:
+            console.print("[yellow]Dry run - no changes written[/yellow]")
+            return
+            
+        # Write the updated config
+        output_file = output or config_file
+        with open(output_file, 'w') as f:
+            yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+            
+        console.print(f"[green]Successfully updated parameter in {output_file}[/green]")
+        
+    except Exception as e:
+        console.print(f"[red]Error: {str(e)}[/red]")
+        raise typer.Exit(code=1)
 
+@app.command("config-list")
+def config_list(
+    config_file: Optional[str] = typer.Option(None, "--config", "-c", help="Path to config file (default: package system_config.yaml)"),
+    section: Optional[str] = typer.Option(None, "--section", "-s", help="Show only a specific section (e.g., 'clustering')"),
+    format: str = typer.Option("table", "--format", "-f", help="Output format: table, json, or yaml"),
+):
+    """List the current configuration parameters."""
+    try:
+        # Find the config file
+        if config_file is None:
+            # Find the default config file in the package
+            import inspect
+            import cluster_finder
+            package_dir = os.path.dirname(inspect.getfile(cluster_finder))
+            config_file = os.path.join(package_dir, "config", "system_config.yaml")
+            
+        if not os.path.exists(config_file):
+            console.print(f"[red]Error: Config file not found at {config_file}[/red]")
+            raise typer.Exit(code=1)
+            
+        # Load the config
+        with open(config_file, 'r') as f:
+            config_data = yaml.safe_load(f)
+            
+        # Filter by section if requested
+        if section:
+            if section in config_data:
+                config_data = {section: config_data[section]}
+            else:
+                console.print(f"[yellow]Warning: Section '{section}' not found in config file[/yellow]")
+                raise typer.Exit(code=1)
+                
+        # Function to flatten nested dict for table display
+        def flatten_dict(d, parent_key='', sep='.'):
+            items = []
+            for k, v in d.items():
+                new_key = f"{parent_key}{sep}{k}" if parent_key else k
+                if isinstance(v, dict):
+                    items.extend(flatten_dict(v, new_key, sep=sep).items())
+                else:
+                    items.append((new_key, v))
+            return dict(items)
+            
+        # Display based on format
+        if format.lower() == 'table':
+            flat_config = flatten_dict(config_data)
+            
+            table = Table(title=f"Configuration Parameters ({os.path.basename(config_file)})")
+            table.add_column("Parameter", style="cyan")
+            table.add_column("Value", style="green")
+            
+            for param, value in flat_config.items():
+                table.add_row(param, str(value))
+                
+            console.print(table)
+            
+        elif format.lower() == 'json':
+            console.print(json.dumps(config_data, indent=2))
+            
+        elif format.lower() == 'yaml':
+            console.print(yaml.dump(config_data, default_flow_style=False))
+            
+        else:
+            console.print(f"[red]Error: Unknown format '{format}'[/red]")
+            raise typer.Exit(code=1)
+            
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
         raise typer.Exit(code=1)

@@ -334,7 +334,7 @@ def run_analysis(
     # Get filter parameters from config
     element_filters = config.get('element_filters', {})
     property_filters = config.get('property_filters', {})
-    analysis_params = config.get('analysis_params', {})
+    analysis_params = config.get('visualization', {})
     ranking_weights = config.get('ranking_weights', {})
     mp_properties = config.get('mp_properties', [])
     

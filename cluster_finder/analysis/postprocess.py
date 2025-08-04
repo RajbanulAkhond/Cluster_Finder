@@ -11,9 +11,27 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from ..core.structure import calculate_centroid
 from ..utils.helpers import get_mp_property, get_mp_properties_batch
 from ..utils.logger import console, get_logger
+from ..utils.config_utils import load_config
 
 # Get a logger for this module
 logger = get_logger('cluster_finder.analysis.postprocess')
+
+# Load configuration
+try:
+    config = load_config()
+    DEFAULT_RANKING_WEIGHTS = config['default_ranking_weights']
+    MAX_CLUSTER_SIZE = config['clustering']['max_cluster_size']
+except (KeyError, FileNotFoundError):
+    # Fallback to default values if config loading fails
+    DEFAULT_RANKING_WEIGHTS = {
+        "min_avg_distance": -1.0,      # Lower distance is better
+        "max_point_group_order": 0.02, # Higher symmetry is better (1.0/48.0)
+        "space_group_order": 0.004,    # Higher symmetry is better (1.0/230.0)
+        "energy_above_hull": -2.0,     # Lower energy is better
+        "formation_energy_per_atom": -1.0, # Lower formation energy is better
+        "band_gap": 1.0                # Higher band gap is better
+    }
+    MAX_CLUSTER_SIZE = 8  # Maximum cluster size for ranking
 
 # Define mappings for symmetry analysis
 # Point group order mapping (simplified for common point groups)
@@ -297,11 +315,11 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
             try:
                 if isinstance(clusters[0], (int, float, str)):
                     sizes = np.array([int(size) for size in clusters])
-                    return np.any(sizes > 8)
+                    return np.any(sizes > MAX_CLUSTER_SIZE)
                 else:
-                    return not all(int(size) <= 8 for size in clusters)
+                    return not all(int(size) <= MAX_CLUSTER_SIZE for size in clusters)
             except:
-                return not all(int(size) <= 8 for size in clusters)
+                return not all(int(size) <= MAX_CLUSTER_SIZE for size in clusters)
         
         # Apply filtering with optimized masks
         large_clusters_mask = df_filtered["cluster_sizes_list"].apply(has_large_clusters)
@@ -317,7 +335,7 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
             
             if large_clusters_mask.any():
                 large_clusters = df_filtered[large_clusters_mask]
-                logger.info(f"Dropping {len(large_clusters)} materials with cluster size > 8")
+                logger.info(f"Dropping {len(large_clusters)} materials with cluster size > {MAX_CLUSTER_SIZE}")
             
             # Apply combined filtering in one operation
             df_filtered = df_filtered[space_group_mask & ~large_clusters_mask]
@@ -325,7 +343,7 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
             # Only filter by cluster size
             if large_clusters_mask.any():
                 large_clusters = df_filtered[large_clusters_mask]
-                logger.info(f"Dropping {len(large_clusters)} materials with cluster size > 8")
+                logger.info(f"Dropping {len(large_clusters)} materials with cluster size > {MAX_CLUSTER_SIZE}")
             
             # Apply filter with boolean indexing
             df_filtered = df_filtered[~large_clusters_mask]
@@ -411,12 +429,8 @@ def rank_clusters(data_source, api_key=None, custom_props=None, prop_weights=Non
     # Initialize rank score
     df_filtered["rank_score"] = 0.0
     
-    # Default weights for standard properties
-    default_weights = {
-        "min_avg_distance": -1.0,  # Lower distance is better
-        "max_point_group_order": 1.0 / 48,  # Normalize by max point group order
-        "space_group_order": 1.0 / 230,  # Normalize by max space group number
-    }
+    # Default weights for standard properties - using configuration
+    default_weights = DEFAULT_RANKING_WEIGHTS
     
     # Add custom property weights if not provided
     if custom_props and prop_weights is None:

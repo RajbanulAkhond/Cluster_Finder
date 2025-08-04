@@ -78,7 +78,7 @@ def generate_supercell(structure, supercell_matrix=(2, 2, 2)):
     structure_copy = structure.copy()
     return structure_copy.make_supercell(supercell_matrix)
 
-def generate_lattice_with_clusters(structure, clusters, tolerance=1e-5):
+def generate_lattice_with_clusters(structure, clusters, tolerance=0.001):
     """
     Generate a new crystal structure using transition metal clusters as lattice sites.
     
